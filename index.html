@@ -27,10 +27,42 @@
     }
 
     /* 一覧画面は読みやすい行長を保つため幅を制限する。
-       編集画面は3カラム化時により広い幅を使うため、独自に幅を持たせる。 */
+       編集画面・一覧画面とも2〜3カラム化時により広い幅を使うため、独自に幅を持たせる。 */
     #view-list {
       max-width: 720px;
       margin-inline: auto;
+    }
+
+    /* 画面幅が十分な場合のみタグサイドバーを左に並べる2カラム化。
+       狭い場合はタグ→ノート一覧の順で縦積みのまま(DOM順どおり)。 */
+    @media (min-width: 1024px) {
+      #view-list {
+        max-width: 1100px;
+        grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
+        grid-template-areas:
+          "heading heading"
+          "tags    notes";
+        gap: 1.5rem;
+        align-items: start;
+      }
+
+      /* hidden 属性より display:grid が常に勝ってしまわないよう、
+         非表示でない時だけ grid を適用する(#view-editor と同じ対策)。 */
+      #view-list:not([hidden]) {
+        display: grid;
+      }
+
+      #list-heading {
+        grid-area: heading;
+      }
+
+      .tags-sidebar {
+        grid-area: tags;
+      }
+
+      .note-list-area {
+        grid-area: notes;
+      }
     }
 
     h1 {
@@ -118,6 +150,63 @@
       border-left: 1px solid var(--border-color);
       background: transparent;
       color: var(--danger-color);
+    }
+
+    .tags-sidebar {
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      padding: 1rem;
+      background: #f7f7f7;
+      margin-bottom: 1.5rem;
+    }
+
+    @media (min-width: 1024px) {
+      .tags-sidebar {
+        margin-bottom: 0;
+      }
+    }
+
+    .tags-sidebar h2 {
+      font-size: 1.1rem;
+      margin: 0 0 0.75rem;
+    }
+
+    #clear-tags-btn {
+      display: block;
+      width: 100%;
+      padding: 0.5rem 0.75rem;
+      margin-bottom: 0.75rem;
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      background: #fff;
+    }
+
+    #tag-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+
+    #tag-list li {
+      margin-bottom: 0.4rem;
+    }
+
+    .tag-btn {
+      display: block;
+      width: 100%;
+      text-align: left;
+      padding: 0.4rem 0.6rem;
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      background: #fff;
+    }
+
+    /* 選択状態はフォーカスの青と区別できるよう別系統の色(--link-color)を使う */
+    .tag-btn-selected {
+      background: var(--link-color);
+      color: #fff;
+      border-color: var(--link-color);
+      font-weight: bold;
     }
 
     #view-editor {
@@ -301,10 +390,20 @@
       .dialog-actions button,
       #title-input,
       #body-input,
-      .related-section {
+      .related-section,
+      .tags-sidebar,
+      #clear-tags-btn,
+      .tag-btn {
         background: #1c1c1c;
         color: #eee;
         border-color: #444;
+      }
+
+      /* .tag-btn と同じ詳細度のため、選択状態を保つには後ろで再度上書きする */
+      .tag-btn-selected {
+        background: var(--link-color);
+        color: #1c1c1c;
+        border-color: var(--link-color);
       }
 
       .note-item {
@@ -327,8 +426,17 @@
   <main>
     <section id="view-list" aria-labelledby="list-heading">
       <h1 id="list-heading">Notes</h1>
-      <button id="new-note-btn" type="button">新規ノート</button>
-      <ul id="note-list"></ul>
+
+      <aside aria-labelledby="tags-heading" class="tags-sidebar">
+        <h2 id="tags-heading">タグ</h2>
+        <button id="clear-tags-btn" type="button">全て表示</button>
+        <ul id="tag-list"></ul>
+      </aside>
+
+      <div class="note-list-area">
+        <button id="new-note-btn" type="button">新規ノート</button>
+        <ul id="note-list"></ul>
+      </div>
     </section>
 
     <section id="view-editor" aria-labelledby="editor-heading" hidden>
@@ -377,6 +485,7 @@
     let notes = [];
     let currentNoteId = null;
     let deleteTargetId = null;
+    let selectedTags = [];
 
     const liveRegion = document.getElementById('live-region');
     const listView = document.getElementById('view-list');
@@ -395,6 +504,8 @@
     const outgoingListEl = document.getElementById('outgoing-list');
     const backlinksDetails = document.getElementById('backlinks-details');
     const backlinksListEl = document.getElementById('backlinks-list');
+    const tagListEl = document.getElementById('tag-list');
+    const clearTagsBtn = document.getElementById('clear-tags-btn');
 
     // --- データ層 -------------------------------------------------
 
@@ -456,6 +567,42 @@
       });
     }
 
+    function extractTags(text) {
+      const pattern = /::(.+?)::/g;
+      const tags = [];
+      let match;
+      while ((match = pattern.exec(text)) !== null) {
+        const trimmed = match[1].trim();
+        if (trimmed !== '') {
+          tags.push(trimmed);
+        }
+      }
+      return tags;
+    }
+
+    function getAllTagsWithCounts(allNotes) {
+      const counts = new Map();
+      allNotes.forEach((note) => {
+        const tagsInNote = new Set(extractTags(note.body));
+        tagsInNote.forEach((tag) => {
+          counts.set(tag, (counts.get(tag) || 0) + 1);
+        });
+      });
+      return [...counts.entries()]
+        .map(([name, count]) => ({ name, count }))
+        .sort((a, b) => b.count - a.count);
+    }
+
+    function filterNotesByTags(notesToFilter, selectedTagNames) {
+      if (selectedTagNames.length === 0) {
+        return notesToFilter;
+      }
+      return notesToFilter.filter((note) => {
+        const noteTags = new Set(extractTags(note.body));
+        return selectedTagNames.every((tag) => noteTags.has(tag));
+      });
+    }
+
     // --- 共通 -----------------------------------------------------
 
     function showView(viewName) {
@@ -480,11 +627,16 @@
 
     // --- 一覧画面 ---------------------------------------------------
 
+    function getVisibleNotes() {
+      const filtered = filterNotesByTags(notes, selectedTags);
+      return sortByUpdatedDesc(filtered);
+    }
+
     function renderNoteList() {
-      const sorted = sortByUpdatedDesc(notes);
+      const visible = getVisibleNotes();
       noteListEl.innerHTML = '';
 
-      sorted.forEach((note) => {
+      visible.forEach((note) => {
         const titleText = note.title.trim() === '' ? '無題' : note.title;
 
         const li = document.createElement('li');
@@ -517,6 +669,66 @@
         li.appendChild(deleteBtn);
         noteListEl.appendChild(li);
       });
+    }
+
+    function renderTagList() {
+      const tagsWithCounts = getAllTagsWithCounts(notes);
+      const availableTagNames = tagsWithCounts.map((t) => t.name);
+
+      // ノートの編集・削除でノート側から消えたタグは選択状態からも外す
+      selectedTags = selectedTags.filter((t) => availableTagNames.includes(t));
+
+      tagListEl.innerHTML = '';
+      tagsWithCounts.forEach(({ name, count }) => {
+        const li = document.createElement('li');
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'tag-btn';
+        btn.dataset.name = name;
+        const isSelected = selectedTags.includes(name);
+        btn.setAttribute('aria-pressed', String(isSelected));
+        if (isSelected) {
+          btn.classList.add('tag-btn-selected');
+        }
+        btn.textContent = `${name} (${count})`;
+        btn.addEventListener('click', () => toggleTag(name));
+        li.appendChild(btn);
+        tagListEl.appendChild(li);
+      });
+    }
+
+    function focusTagButton(name) {
+      const btn = tagListEl.querySelector(`.tag-btn[data-name="${CSS.escape(name)}"]`);
+      if (btn) {
+        btn.focus();
+      }
+    }
+
+    function announceFilterState() {
+      if (selectedTags.length === 0) {
+        announce(`絞り込みを解除しました、${notes.length}件`);
+        return;
+      }
+      const visibleCount = getVisibleNotes().length;
+      announce(`${selectedTags.join('と')}で絞り込み中、${visibleCount}件`);
+    }
+
+    function toggleTag(name) {
+      const index = selectedTags.indexOf(name);
+      if (index === -1) {
+        selectedTags.push(name);
+      } else {
+        selectedTags.splice(index, 1);
+      }
+      renderTagList();
+      renderNoteList();
+      focusTagButton(name);
+      announceFilterState();
+    }
+
+    function renderListView() {
+      renderTagList();
+      renderNoteList();
     }
 
     function focusFirstListItem() {
@@ -556,7 +768,7 @@
       };
       notes.push(newNote);
       saveNotes(notes);
-      renderNoteList();
+      renderListView();
       openEditor(newNote.id);
     }
 
@@ -572,15 +784,15 @@
     }
 
     function handleConfirmDelete() {
-      const sorted = sortByUpdatedDesc(notes);
-      const deletedIndex = sorted.findIndex((n) => n.id === deleteTargetId);
-      const deletedNote = sorted[deletedIndex];
+      const visible = getVisibleNotes();
+      const deletedIndex = visible.findIndex((n) => n.id === deleteTargetId);
+      const deletedNote = visible[deletedIndex];
 
       deleteDialog.close();
 
       notes = notes.filter((n) => n.id !== deleteTargetId);
       saveNotes(notes);
-      renderNoteList();
+      renderListView();
       focusAfterDelete(deletedIndex);
       announce(`「${deletedNote.title.trim() === '' ? '無題' : deletedNote.title}」を削除しました`);
     }
@@ -678,7 +890,7 @@
       const noteId = currentNoteId;
       resolveDuplicateTitle(noteId);
       currentNoteId = null;
-      renderNoteList();
+      renderListView();
       showView('list');
       focusListItem(noteId);
     }
@@ -707,6 +919,12 @@
 
     newNoteBtn.addEventListener('click', handleNewNoteClick);
     backBtn.addEventListener('click', closeEditor);
+    clearTagsBtn.addEventListener('click', () => {
+      selectedTags = [];
+      renderTagList();
+      renderNoteList();
+      announceFilterState();
+    });
     titleInput.addEventListener('input', handleEditorInput);
     bodyInput.addEventListener('input', handleEditorInput);
 
@@ -749,7 +967,7 @@
 
     function init() {
       notes = loadNotes();
-      renderNoteList();
+      renderListView();
       focusFirstListItem();
     }
 
