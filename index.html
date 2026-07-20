@@ -323,6 +323,18 @@
       text-decoration: underline;
     }
 
+    /* [[ / :: のサジェストポップアップ。本文と同じ18px以上のフォントを継承する。 */
+    .cm-tooltip-autocomplete {
+      font: inherit;
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+    }
+
+    .cm-tooltip-autocomplete ul li[aria-selected] {
+      background: var(--focus-color);
+      color: #fff;
+    }
+
     .related-section {
       grid-area: related;
       border: 1px solid var(--border-color);
@@ -416,6 +428,7 @@
       .dialog-actions button,
       #title-input,
       .cm-editor,
+      .cm-tooltip-autocomplete,
       .related-section,
       .tags-sidebar,
       #clear-tags-btn,
@@ -507,11 +520,14 @@
 
   <script type="module">
     // CodeMirror 6 を esm.sh 経由でCDN読み込みする。
-    // ?deps=... は、複数の import URL 間で @codemirror/state / @codemirror/view の
+    // ?deps=... は、複数の import URL 間で @codemirror/state / @codemirror/view / @codemirror/language の
     // バージョンがズレて二重に読み込まれる既知の問題(instanceofが壊れる)を防ぐための指定。
-    import { EditorView, minimalSetup } from 'https://esm.sh/codemirror@6.0.2?deps=@codemirror/state@6.7.1,@codemirror/view@6.43.6';
+    import { EditorView, minimalSetup } from 'https://esm.sh/codemirror@6.0.2?deps=@codemirror/state@6.7.1,@codemirror/view@6.43.6,@codemirror/language@6.12.4';
     import { EditorState } from 'https://esm.sh/@codemirror/state@6.7.1';
     import { Decoration, ViewPlugin, MatchDecorator } from 'https://esm.sh/@codemirror/view@6.43.6?deps=@codemirror/state@6.7.1';
+    import { autocompletion, completionStatus } from 'https://esm.sh/@codemirror/autocomplete@6.20.3?deps=@codemirror/state@6.7.1,@codemirror/view@6.43.6,@codemirror/language@6.12.4';
+    // Fuse.js: サジェスト候補のあいまい一致(文字列類似度)判定に使う
+    import Fuse from 'https://esm.sh/fuse.js@7.5.0';
 
     const STORAGE_KEY = 'note-app:notes';
 
@@ -574,11 +590,119 @@
       }
     }, { decorations: (instance) => instance.decorations });
 
+    // --- サジェスト候補(Fuse.js) -------------------------------------
+
+    let linkFuse = null;
+    let linkSuggestionItems = [];
+    let tagFuse = null;
+    let tagSuggestionItems = [];
+
+    // notes配列が変わるたびに呼び直し、サジェスト用のFuseインスタンスを作り直す。
+    function rebuildSuggestionSources() {
+      linkSuggestionItems = notes.map((note) => ({
+        id: note.id,
+        title: note.title.trim() === '' ? '無題' : note.title,
+        citationCount: getCitationCount(note, notes),
+      }));
+      // threshold: 0.4 ・・・ 0(完全一致のみ)〜1(何でも一致)の目盛りで、
+      // タイトルの一部だけ覚えている入力や軽微なタイポは拾いつつ、無関係な候補が
+      // 上位5件を占領しないよう、既定値0.6よりやや厳しめに設定する。
+      // ignoreLocation: true ・・・ 既定では文字列の先頭付近の一致を優遇するが、
+      // タイトルの途中や末尾の断片を入力するケースもあるため位置による優遇を無効化する。
+      linkFuse = new Fuse(linkSuggestionItems, { keys: ['title'], threshold: 0.4, ignoreLocation: true });
+
+      tagSuggestionItems = getAllTagsWithCounts(notes); // 既存関数を再利用(使用頻度順ソート済み)
+      tagFuse = new Fuse(tagSuggestionItems, { keys: ['name'], threshold: 0.4, ignoreLocation: true });
+    }
+
+    // Fuse.js はあくまで候補の絞り込みだけに使い、最終的な並び順は引用数で決め直す。
+    // 編集中の自分自身のノートは、自分自身へのリンクを除外する既存方針(getOutgoingNotes)と揃え、候補から外す。
+    function getLinkSuggestions(query) {
+      const candidates = query.trim() === ''
+        ? [...linkSuggestionItems]
+        : linkFuse.search(query).map((r) => r.item);
+      return candidates
+        .filter((item) => item.id !== currentNoteId)
+        .sort((a, b) => b.citationCount - a.citationCount)
+        .slice(0, 5);
+    }
+
+    // 最終的な並び順は使用頻度(count)で決め直す。
+    function getTagSuggestions(query) {
+      const candidates = query.trim() === ''
+        ? [...tagSuggestionItems]
+        : tagFuse.search(query).map((r) => r.item);
+      return candidates
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 5);
+    }
+
+    // [[ の直後を補完する CompletionSource。
+    // matchBefore は「カーソル直前がこの正規表現にマッチするか」を調べる CodeMirror のAPI。
+    // [[ の後ろに [ や ] を含まない文字列が続き、それがカーソル位置まで連続している状態を検出する。
+    function linkCompletionSource(context) {
+      const match = context.matchBefore(/\[\[([^\[\]]*)$/);
+      if (!match) {
+        return null;
+      }
+      const query = match.text.slice(2); // "[[" の分を除いた入力済み文字列
+      const from = match.from + 2;
+      const candidates = getLinkSuggestions(query);
+      if (candidates.length === 0) {
+        return null; // 候補0件ならポップアップを出さない
+      }
+      return {
+        from,
+        to: context.pos,
+        options: candidates.map((item) => ({
+          label: item.title,
+          apply: (view, completion, applyFrom, applyTo) => {
+            // 選択した候補名 + "]]" を挿入し、カーソルを "]]" の直後に置く
+            const insertText = `${item.title}]]`;
+            view.dispatch({
+              changes: { from: applyFrom, to: applyTo, insert: insertText },
+              selection: { anchor: applyFrom + insertText.length },
+            });
+          },
+        })),
+      };
+    }
+
+    // :: の直後を補完する CompletionSource(考え方はリンク側と同じ)。
+    function tagCompletionSource(context) {
+      const match = context.matchBefore(/::([^:]*)$/);
+      if (!match) {
+        return null;
+      }
+      const query = match.text.slice(2);
+      const from = match.from + 2;
+      const candidates = getTagSuggestions(query);
+      if (candidates.length === 0) {
+        return null;
+      }
+      return {
+        from,
+        to: context.pos,
+        options: candidates.map((item) => ({
+          label: item.name,
+          apply: (view, completion, applyFrom, applyTo) => {
+            const insertText = `${item.name}::`;
+            view.dispatch({
+              changes: { from: applyFrom, to: applyTo, insert: insertText },
+              selection: { anchor: applyFrom + insertText.length },
+            });
+          },
+        })),
+      };
+    }
+
     const bodyExtensions = [
       minimalSetup,
       EditorView.lineWrapping, // textarea同様、長い行を折り返す(CodeMirrorは既定では折り返さない)
       linkHighlightPlugin,
       tagHighlightPlugin,
+      // override で、この2つのソースだけが候補を出すようにする
+      autocompletion({ override: [linkCompletionSource, tagCompletionSource] }),
       EditorView.contentAttributes.of({ 'aria-labelledby': 'body-label' }),
       EditorView.updateListener.of((update) => {
         // docChanged: このトランザクションで本文が変わったかどうか。
@@ -657,6 +781,20 @@
         }
         return getOutgoingNotes(other, allNotes).some((n) => n.id === note.id);
       });
+    }
+
+    // 引用数 = 他の全ノートの本文中に [[このノートのタイトル]] が出現する回数の合計(自分自身は除く)。
+    // getBacklinkNotes と同じ「他ノートの本文をパースして参照を探す」考え方を使うが、
+    // ノート単位ではなく出現回数そのものを数える(サジェストの並び順に使う)。
+    function getCitationCount(note, allNotes) {
+      let count = 0;
+      allNotes.forEach((other) => {
+        if (other.id === note.id) {
+          return;
+        }
+        count += extractLinkTitles(other.body).filter((title) => title === note.title.trim()).length;
+      });
+      return count;
     }
 
     function extractTags(text) {
@@ -860,6 +998,7 @@
       };
       notes.push(newNote);
       saveNotes(notes);
+      rebuildSuggestionSources();
       renderListView();
       openEditor(newNote.id);
     }
@@ -884,6 +1023,7 @@
 
       notes = notes.filter((n) => n.id !== deleteTargetId);
       saveNotes(notes);
+      rebuildSuggestionSources();
       renderListView();
       focusAfterDelete(deletedIndex);
       announce(`「${deletedNote.title.trim() === '' ? '無題' : deletedNote.title}」を削除しました`);
@@ -952,6 +1092,7 @@
       note.title = finalTitle;
       note.updatedAt = Date.now();
       saveNotes(notes);
+      rebuildSuggestionSources();
       if (noteId === currentNoteId) {
         titleInput.value = finalTitle;
         renderRelatedNotes();
@@ -996,6 +1137,7 @@
       note.body = bodyView.state.doc.toString();
       note.updatedAt = Date.now();
       saveNotes(notes);
+      rebuildSuggestionSources();
       renderRelatedNotes();
     }
 
@@ -1045,6 +1187,11 @@
         // ダイアログ表示中は <dialog> 標準のフォーカストラップ・Escape挙動に任せる
         return;
       }
+      if (event.key === 'Escape' && completionStatus(bodyView.state) != null) {
+        // 候補ポップアップ表示中の Escape は CodeMirror 側の closeCompletion に任せ、
+        // 編集画面ごと閉じてしまわないようにする
+        return;
+      }
       if (event.key === 'Escape' && !editorView.hidden) {
         closeEditor();
       } else if (event.ctrlKey && event.key.toLowerCase() === 's') {
@@ -1059,6 +1206,7 @@
 
     function init() {
       notes = loadNotes();
+      rebuildSuggestionSources();
       renderListView();
       focusFirstListItem();
     }
