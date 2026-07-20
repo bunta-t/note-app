@@ -2,9 +2,506 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Note App</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --focus-color: #2563eb;
+      --border-color: #ccc;
+      --danger-color: #b91c1c;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: system-ui, "Hiragino Kaku Gothic ProN", sans-serif;
+      font-size: 1.05rem;
+      line-height: 1.6;
+      margin: 0;
+      padding: 1.5rem;
+      max-width: 720px;
+      margin-inline: auto;
+    }
+
+    h1 {
+      font-size: 1.4rem;
+      margin-bottom: 1rem;
+    }
+
+    .visually-hidden {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    button {
+      font: inherit;
+      cursor: pointer;
+    }
+
+    :focus-visible {
+      outline: 3px solid var(--focus-color);
+      outline-offset: 2px;
+    }
+
+    #new-note-btn {
+      display: block;
+      width: 100%;
+      padding: 0.75rem 1rem;
+      margin-bottom: 1rem;
+      border: 2px solid var(--focus-color);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--focus-color);
+      font-weight: bold;
+    }
+
+    #note-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+
+    .note-item {
+      display: flex;
+      gap: 0.5rem;
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      margin-bottom: 0.75rem;
+    }
+
+    .note-open-btn {
+      flex: 1;
+      text-align: left;
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+      padding: 0.75rem 1rem;
+      border: none;
+      background: transparent;
+    }
+
+    .note-title {
+      font-weight: bold;
+    }
+
+    .note-updated {
+      font-size: 0.85rem;
+      color: #555;
+    }
+
+    .note-delete-btn {
+      padding: 0.75rem 1rem;
+      border: none;
+      border-left: 1px solid var(--border-color);
+      background: transparent;
+      color: var(--danger-color);
+    }
+
+    #view-editor {
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    #view-editor:not([hidden]) {
+      display: flex;
+    }
+
+    #back-btn {
+      align-self: flex-start;
+      padding: 0.5rem 1rem;
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      background: #fff;
+    }
+
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+    }
+
+    label {
+      font-weight: bold;
+    }
+
+    #title-input,
+    #body-input {
+      font: inherit;
+      padding: 0.6rem;
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+    }
+
+    #body-input {
+      min-height: 50vh;
+      resize: vertical;
+    }
+
+    dialog {
+      border: none;
+      border-radius: 8px;
+      padding: 1.5rem;
+      max-width: 400px;
+    }
+
+    dialog::backdrop {
+      background: rgba(0, 0, 0, 0.5);
+    }
+
+    .dialog-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.75rem;
+      margin-top: 1.5rem;
+    }
+
+    .dialog-actions button {
+      padding: 0.6rem 1rem;
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      background: #fff;
+    }
+
+    #delete-confirm-btn {
+      border-color: var(--danger-color);
+      color: var(--danger-color);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      body {
+        background: #111;
+        color: #eee;
+      }
+
+      #new-note-btn,
+      #back-btn,
+      dialog,
+      .dialog-actions button,
+      #title-input,
+      #body-input {
+        background: #1c1c1c;
+        color: #eee;
+        border-color: #444;
+      }
+
+      .note-item {
+        border-color: #444;
+      }
+
+      .note-delete-btn {
+        border-left-color: #444;
+      }
+
+      .note-updated {
+        color: #aaa;
+      }
+    }
+  </style>
 </head>
 <body>
-  <h1>Hello, note app</h1>
+  <div id="live-region" class="visually-hidden" aria-live="polite"></div>
+
+  <main>
+    <section id="view-list" aria-labelledby="list-heading">
+      <h1 id="list-heading">Notes</h1>
+      <button id="new-note-btn" type="button">新規ノート</button>
+      <ul id="note-list"></ul>
+    </section>
+
+    <section id="view-editor" aria-labelledby="editor-heading" hidden>
+      <button id="back-btn" type="button">一覧に戻る</button>
+      <h1 id="editor-heading">ノート編集</h1>
+      <div class="field">
+        <label for="title-input">タイトル</label>
+        <input id="title-input" type="text">
+      </div>
+      <div class="field">
+        <label for="body-input">本文</label>
+        <textarea id="body-input"></textarea>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="delete-dialog" aria-labelledby="delete-dialog-heading">
+    <h2 id="delete-dialog-heading">ノートを削除しますか?</h2>
+    <p id="delete-dialog-message"></p>
+    <div class="dialog-actions">
+      <button id="delete-cancel-btn" type="button" autofocus>キャンセル</button>
+      <button id="delete-confirm-btn" type="button">削除する</button>
+    </div>
+  </dialog>
+
+  <script>
+    const STORAGE_KEY = 'note-app:notes';
+
+    let notes = [];
+    let currentNoteId = null;
+    let deleteTargetId = null;
+
+    const liveRegion = document.getElementById('live-region');
+    const listView = document.getElementById('view-list');
+    const editorView = document.getElementById('view-editor');
+    const noteListEl = document.getElementById('note-list');
+    const newNoteBtn = document.getElementById('new-note-btn');
+    const backBtn = document.getElementById('back-btn');
+    const titleInput = document.getElementById('title-input');
+    const bodyInput = document.getElementById('body-input');
+    const deleteDialog = document.getElementById('delete-dialog');
+    const deleteMessageEl = document.getElementById('delete-dialog-message');
+    const deleteCancelBtn = document.getElementById('delete-cancel-btn');
+    const deleteConfirmBtn = document.getElementById('delete-confirm-btn');
+
+    // --- データ層 -------------------------------------------------
+
+    function loadNotes() {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) {
+        return [];
+      }
+      try {
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (error) {
+        return [];
+      }
+    }
+
+    function saveNotes(notesToSave) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(notesToSave));
+    }
+
+    function sortByUpdatedDesc(list) {
+      return [...list].sort((a, b) => b.updatedAt - a.updatedAt);
+    }
+
+    // --- 共通 -----------------------------------------------------
+
+    function showView(viewName) {
+      const showList = viewName === 'list';
+      listView.hidden = !showList;
+      editorView.hidden = showList;
+    }
+
+    function announce(message) {
+      // 直前と同じ文言でも読み上げられるよう、一度空にしてから設定する
+      liveRegion.textContent = '';
+      window.setTimeout(() => {
+        liveRegion.textContent = message;
+      }, 50);
+    }
+
+    function formatDateTime(timestamp) {
+      const date = new Date(timestamp);
+      const pad = (n) => String(n).padStart(2, '0');
+      return `${date.getFullYear()}/${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    }
+
+    // --- 一覧画面 ---------------------------------------------------
+
+    function renderNoteList() {
+      const sorted = sortByUpdatedDesc(notes);
+      noteListEl.innerHTML = '';
+
+      sorted.forEach((note) => {
+        const titleText = note.title.trim() === '' ? '無題' : note.title;
+
+        const li = document.createElement('li');
+        li.className = 'note-item';
+
+        const openBtn = document.createElement('button');
+        openBtn.type = 'button';
+        openBtn.className = 'note-open-btn';
+        openBtn.dataset.id = note.id;
+
+        const titleSpan = document.createElement('span');
+        titleSpan.className = 'note-title';
+        titleSpan.textContent = titleText;
+
+        const updatedSpan = document.createElement('span');
+        updatedSpan.className = 'note-updated';
+        updatedSpan.textContent = `更新: ${formatDateTime(note.updatedAt)}`;
+
+        openBtn.appendChild(titleSpan);
+        openBtn.appendChild(updatedSpan);
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.type = 'button';
+        deleteBtn.className = 'note-delete-btn';
+        deleteBtn.dataset.id = note.id;
+        deleteBtn.setAttribute('aria-label', `「${titleText}」を削除`);
+        deleteBtn.textContent = '削除';
+
+        li.appendChild(openBtn);
+        li.appendChild(deleteBtn);
+        noteListEl.appendChild(li);
+      });
+    }
+
+    function focusFirstListItem() {
+      const firstBtn = noteListEl.querySelector('.note-open-btn');
+      if (firstBtn) {
+        firstBtn.focus();
+      } else {
+        newNoteBtn.focus();
+      }
+    }
+
+    function focusListItem(noteId) {
+      const btn = noteListEl.querySelector(`.note-open-btn[data-id="${noteId}"]`);
+      if (btn) {
+        btn.focus();
+      } else {
+        focusFirstListItem();
+      }
+    }
+
+    function focusAfterDelete(deletedIndex) {
+      const items = noteListEl.querySelectorAll('.note-open-btn');
+      if (items.length === 0) {
+        newNoteBtn.focus();
+        return;
+      }
+      const targetIndex = Math.min(deletedIndex, items.length - 1);
+      items[targetIndex].focus();
+    }
+
+    function handleNewNoteClick() {
+      const newNote = {
+        id: crypto.randomUUID(),
+        title: '',
+        body: '',
+        updatedAt: Date.now(),
+      };
+      notes.push(newNote);
+      saveNotes(notes);
+      renderNoteList();
+      openEditor(newNote.id);
+    }
+
+    function handleDeleteClick(noteId) {
+      const note = notes.find((n) => n.id === noteId);
+      if (!note) {
+        return;
+      }
+      const titleText = note.title.trim() === '' ? '無題' : note.title;
+      deleteTargetId = noteId;
+      deleteMessageEl.textContent = `「${titleText}」を削除します。この操作は元に戻せません。`;
+      deleteDialog.showModal();
+    }
+
+    function handleConfirmDelete() {
+      const sorted = sortByUpdatedDesc(notes);
+      const deletedIndex = sorted.findIndex((n) => n.id === deleteTargetId);
+      const deletedNote = sorted[deletedIndex];
+
+      deleteDialog.close();
+
+      notes = notes.filter((n) => n.id !== deleteTargetId);
+      saveNotes(notes);
+      renderNoteList();
+      focusAfterDelete(deletedIndex);
+      announce(`「${deletedNote.title.trim() === '' ? '無題' : deletedNote.title}」を削除しました`);
+    }
+
+    // --- 編集画面 ---------------------------------------------------
+
+    function openEditor(noteId) {
+      const note = notes.find((n) => n.id === noteId);
+      if (!note) {
+        return;
+      }
+      currentNoteId = noteId;
+      titleInput.value = note.title;
+      bodyInput.value = note.body;
+      showView('editor');
+      titleInput.focus();
+    }
+
+    function closeEditor() {
+      const noteId = currentNoteId;
+      currentNoteId = null;
+      renderNoteList();
+      showView('list');
+      focusListItem(noteId);
+    }
+
+    function handleEditorInput() {
+      const note = notes.find((n) => n.id === currentNoteId);
+      if (!note) {
+        return;
+      }
+      note.title = titleInput.value;
+      note.body = bodyInput.value;
+      note.updatedAt = Date.now();
+      saveNotes(notes);
+    }
+
+    function handleExplicitSave() {
+      handleEditorInput();
+      announce('保存しました');
+    }
+
+    // --- イベント登録 -------------------------------------------------
+
+    newNoteBtn.addEventListener('click', handleNewNoteClick);
+    backBtn.addEventListener('click', closeEditor);
+    titleInput.addEventListener('input', handleEditorInput);
+    bodyInput.addEventListener('input', handleEditorInput);
+
+    noteListEl.addEventListener('click', (event) => {
+      const openBtn = event.target.closest('.note-open-btn');
+      if (openBtn) {
+        openEditor(openBtn.dataset.id);
+        return;
+      }
+      const deleteBtn = event.target.closest('.note-delete-btn');
+      if (deleteBtn) {
+        handleDeleteClick(deleteBtn.dataset.id);
+      }
+    });
+
+    deleteCancelBtn.addEventListener('click', () => {
+      deleteDialog.close();
+    });
+    deleteConfirmBtn.addEventListener('click', handleConfirmDelete);
+    deleteDialog.addEventListener('close', () => {
+      deleteTargetId = null;
+    });
+
+    document.addEventListener('keydown', (event) => {
+      if (deleteDialog.open) {
+        // ダイアログ表示中は <dialog> 標準のフォーカストラップ・Escape挙動に任せる
+        return;
+      }
+      if (event.key === 'Escape' && !editorView.hidden) {
+        closeEditor();
+      } else if (event.ctrlKey && event.key.toLowerCase() === 's') {
+        if (!editorView.hidden) {
+          event.preventDefault();
+          handleExplicitSave();
+        }
+      }
+    });
+
+    // --- 初期化 ---------------------------------------------------
+
+    function init() {
+      notes = loadNotes();
+      renderNoteList();
+      focusFirstListItem();
+    }
+
+    init();
+  </script>
 </body>
 </html>
