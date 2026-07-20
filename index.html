@@ -12,6 +12,7 @@
       --border-color: #ccc;
       --danger-color: #b91c1c;
       --link-color: #5b21b6;
+      --tag-color: #166534;
     }
 
     * {
@@ -285,17 +286,41 @@
       font-weight: bold;
     }
 
-    #title-input,
-    #body-input {
+    #title-input {
       font: inherit;
       padding: 0.6rem;
       border: 1px solid var(--border-color);
       border-radius: 6px;
     }
 
-    #body-input {
+    /* 本文欄(CodeMirror)。.cm-editor は既定スタイルの優先度が低いため、
+       通常のセレクタでそのまま上書きできる。 */
+    .cm-editor {
+      width: 100%;
+      font: inherit;
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+    }
+
+    .cm-content {
       min-height: 50vh;
-      resize: vertical;
+      padding: 0.6rem;
+    }
+
+    .cm-editor.cm-focused {
+      outline: 4px solid var(--focus-color);
+      outline-offset: 3px;
+      /* 入力欄は文字が読めることを優先し、背景色は変えない方針を踏襲 */
+    }
+
+    .link-highlight {
+      color: var(--link-color);
+      text-decoration: underline;
+    }
+
+    .tag-highlight {
+      color: var(--tag-color);
+      text-decoration: underline;
     }
 
     .related-section {
@@ -377,6 +402,7 @@
       :root {
         --focus-bg: transparent;
         --link-color: #c4b5fd;
+        --tag-color: #86efac;
       }
 
       body {
@@ -389,7 +415,7 @@
       dialog,
       .dialog-actions button,
       #title-input,
-      #body-input,
+      .cm-editor,
       .related-section,
       .tags-sidebar,
       #clear-tags-btn,
@@ -451,8 +477,8 @@
       </div>
 
       <div class="field" id="body-field">
-        <label for="body-input">本文</label>
-        <textarea id="body-input"></textarea>
+        <label id="body-label">本文</label>
+        <div id="body-editor"></div>
       </div>
 
       <section aria-labelledby="related-heading" class="related-section">
@@ -479,7 +505,14 @@
     </div>
   </dialog>
 
-  <script>
+  <script type="module">
+    // CodeMirror 6 を esm.sh 経由でCDN読み込みする。
+    // ?deps=... は、複数の import URL 間で @codemirror/state / @codemirror/view の
+    // バージョンがズレて二重に読み込まれる既知の問題(instanceofが壊れる)を防ぐための指定。
+    import { EditorView, minimalSetup } from 'https://esm.sh/codemirror@6.0.2?deps=@codemirror/state@6.7.1,@codemirror/view@6.43.6';
+    import { EditorState } from 'https://esm.sh/@codemirror/state@6.7.1';
+    import { Decoration, ViewPlugin, MatchDecorator } from 'https://esm.sh/@codemirror/view@6.43.6?deps=@codemirror/state@6.7.1';
+
     const STORAGE_KEY = 'note-app:notes';
 
     let notes = [];
@@ -494,7 +527,6 @@
     const newNoteBtn = document.getElementById('new-note-btn');
     const backBtn = document.getElementById('back-btn');
     const titleInput = document.getElementById('title-input');
-    const bodyInput = document.getElementById('body-input');
     const deleteDialog = document.getElementById('delete-dialog');
     const deleteMessageEl = document.getElementById('delete-dialog-message');
     const deleteCancelBtn = document.getElementById('delete-cancel-btn');
@@ -506,6 +538,66 @@
     const backlinksListEl = document.getElementById('backlinks-list');
     const tagListEl = document.getElementById('tag-list');
     const clearTagsBtn = document.getElementById('clear-tags-btn');
+
+    // --- 本文エディタ(CodeMirror) -------------------------------------
+
+    // [[ノート名]] を装飾するプラグイン。extractLinkTitles と同じ正規表現を使い、
+    // 「ハイライトされる範囲」と「実際にリンクとして解決される範囲」を一致させる。
+    const linkMark = Decoration.mark({ class: 'link-highlight' });
+    const linkMatcher = new MatchDecorator({
+      regexp: /\[\[([^\[\]]+)\]\]/g,
+      decoration: () => linkMark,
+    });
+    const linkHighlightPlugin = ViewPlugin.fromClass(class {
+      constructor(view) {
+        this.decorations = linkMatcher.createDeco(view);
+      }
+      update(update) {
+        // update(ViewUpdate) は直前の状態からの変更内容を表す不変オブジェクト。
+        // 差分だけを見て装飾範囲を更新するので、毎回本文全体を舐め直さない。
+        this.decorations = linkMatcher.updateDeco(update, this.decorations);
+      }
+    }, { decorations: (instance) => instance.decorations });
+
+    // ::タグ名:: を装飾するプラグイン。extractTags と同じ正規表現を使う。
+    const tagMark = Decoration.mark({ class: 'tag-highlight' });
+    const tagMatcher = new MatchDecorator({
+      regexp: /::(.+?)::/g,
+      decoration: () => tagMark,
+    });
+    const tagHighlightPlugin = ViewPlugin.fromClass(class {
+      constructor(view) {
+        this.decorations = tagMatcher.createDeco(view);
+      }
+      update(update) {
+        this.decorations = tagMatcher.updateDeco(update, this.decorations);
+      }
+    }, { decorations: (instance) => instance.decorations });
+
+    const bodyExtensions = [
+      minimalSetup,
+      EditorView.lineWrapping, // textarea同様、長い行を折り返す(CodeMirrorは既定では折り返さない)
+      linkHighlightPlugin,
+      tagHighlightPlugin,
+      EditorView.contentAttributes.of({ 'aria-labelledby': 'body-label' }),
+      EditorView.updateListener.of((update) => {
+        // docChanged: このトランザクションで本文が変わったかどうか。
+        // 既存の handleEditorInput() をそのまま呼ぶことで、自動保存・関連ノート再計算の
+        // 呼び出し経路は既存のtextarea版から一切変えない。
+        if (update.docChanged) {
+          handleEditorInput();
+        }
+      }),
+    ];
+
+    const bodyView = new EditorView({
+      state: EditorState.create({ doc: '', extensions: bodyExtensions }),
+      parent: document.getElementById('body-editor'),
+    });
+
+    function setBodyContent(text) {
+      bodyView.setState(EditorState.create({ doc: text, extensions: bodyExtensions }));
+    }
 
     // --- データ層 -------------------------------------------------
 
@@ -880,7 +972,7 @@
       }
       currentNoteId = noteId;
       titleInput.value = note.title;
-      bodyInput.value = note.body;
+      setBodyContent(note.body);
       renderRelatedNotes();
       showView('editor');
       titleInput.focus();
@@ -901,7 +993,7 @@
         return;
       }
       note.title = titleInput.value;
-      note.body = bodyInput.value;
+      note.body = bodyView.state.doc.toString();
       note.updatedAt = Date.now();
       saveNotes(notes);
       renderRelatedNotes();
@@ -926,7 +1018,7 @@
       announceFilterState();
     });
     titleInput.addEventListener('input', handleEditorInput);
-    bodyInput.addEventListener('input', handleEditorInput);
+    // 本文側の入力検知は bodyExtensions 内の EditorView.updateListener が担う
 
     noteListEl.addEventListener('click', (event) => {
       const openBtn = event.target.closest('.note-open-btn');
