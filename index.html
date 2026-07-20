@@ -24,6 +24,11 @@
       line-height: 1.6;
       margin: 0;
       padding: 1.5rem;
+    }
+
+    /* 一覧画面は読みやすい行長を保つため幅を制限する。
+       編集画面は3カラム化時により広い幅を使うため、独自に幅を持たせる。 */
+    #view-list {
       max-width: 720px;
       margin-inline: auto;
     }
@@ -55,9 +60,9 @@
       outline-offset: 3px;
     }
 
+    /* 入力欄は文字が読めることを優先し、背景色は変えず枠線のみ強調する */
     button:focus-visible,
-    input:focus-visible,
-    textarea:focus-visible {
+    summary:focus-visible {
       background-color: var(--focus-bg);
     }
 
@@ -116,20 +121,69 @@
     }
 
     #view-editor {
-      flex-direction: column;
-      gap: 1rem;
+      max-width: 720px;
+      margin-inline: auto;
+      grid-template-columns: 1fr;
+      grid-template-areas:
+        "back"
+        "heading"
+        "title"
+        "related"
+        "body";
+      gap: 1.5rem;
     }
 
     #view-editor:not([hidden]) {
-      display: flex;
+      display: grid;
+    }
+
+    /* 画面幅が十分な場合のみ3カラム化(左は将来のサイドバー用の空き列)。
+       拡大表示で実効幅が狭くなった場合は自然に縦積みへ戻る。
+       左列は最小限の固定幅、右列(関連ノート)は見出しが折り返さない幅を
+       minmax() で確保し、中央(本文)に残りの幅を割り当てる。 */
+    @media (min-width: 1024px) {
+      #view-editor {
+        max-width: 1100px;
+        grid-template-columns: 96px minmax(0, 1fr) minmax(280px, 360px);
+        grid-template-areas:
+          "back    back    back"
+          "heading heading heading"
+          "sidebar title   related"
+          "sidebar body    related";
+      }
     }
 
     #back-btn {
-      align-self: flex-start;
+      grid-area: back;
+      justify-self: start;
       padding: 0.5rem 1rem;
       border: 1px solid var(--border-color);
       border-radius: 6px;
       background: #fff;
+    }
+
+    #editor-heading {
+      grid-area: heading;
+    }
+
+    /* 将来のタグ機能サイドバー用に予約した空き列。中身は今回は追加しない */
+    .editor-sidebar {
+      display: none;
+    }
+
+    @media (min-width: 1024px) {
+      .editor-sidebar {
+        display: block;
+        grid-area: sidebar;
+      }
+    }
+
+    #title-field {
+      grid-area: title;
+    }
+
+    #body-field {
+      grid-area: body;
     }
 
     .field {
@@ -156,26 +210,16 @@
     }
 
     .related-section {
+      grid-area: related;
       border: 1px solid var(--border-color);
       border-radius: 6px;
       padding: 1rem;
       background: #f7f7f7;
     }
 
-    .related-center {
-      margin-bottom: 0.75rem;
-    }
-
-    .related-center-label {
-      display: block;
-      font-size: 0.9rem;
-      color: #555;
-    }
-
-    .related-center-title {
-      display: block;
-      font-size: 1.3rem;
-      font-weight: bold;
+    .related-section h2 {
+      font-size: 1.1rem;
+      margin: 0 0 0.5rem;
     }
 
     .related-section details {
@@ -183,6 +227,7 @@
     }
 
     .related-section summary {
+      font-size: 1rem;
       font-weight: bold;
       cursor: pointer;
       padding: 0.25rem 0;
@@ -270,8 +315,7 @@
         border-left-color: #444;
       }
 
-      .note-updated,
-      .related-center-label {
+      .note-updated {
         color: #aaa;
       }
     }
@@ -290,18 +334,22 @@
     <section id="view-editor" aria-labelledby="editor-heading" hidden>
       <button id="back-btn" type="button">一覧に戻る</button>
       <h1 id="editor-heading">ノート編集</h1>
-      <div class="field">
+
+      <aside class="editor-sidebar" aria-hidden="true"></aside>
+
+      <div class="field" id="title-field">
         <label for="title-input">タイトル</label>
         <input id="title-input" type="text">
+      </div>
+
+      <div class="field" id="body-field">
+        <label for="body-input">本文</label>
+        <textarea id="body-input"></textarea>
       </div>
 
       <section aria-labelledby="related-heading" class="related-section">
         <h2 id="related-heading">関連ノート</h2>
         <p id="related-empty-message" hidden>関連ノートはありません</p>
-        <div class="related-center">
-          <span class="related-center-label">選択中のノート</span>
-          <span id="related-center-title" class="related-center-title"></span>
-        </div>
         <details id="outgoing-details" open>
           <summary>参照しているノート</summary>
           <ul id="outgoing-list"></ul>
@@ -311,11 +359,6 @@
           <ul id="backlinks-list"></ul>
         </details>
       </section>
-
-      <div class="field">
-        <label for="body-input">本文</label>
-        <textarea id="body-input"></textarea>
-      </div>
     </section>
   </main>
 
@@ -348,7 +391,6 @@
     const deleteCancelBtn = document.getElementById('delete-cancel-btn');
     const deleteConfirmBtn = document.getElementById('delete-confirm-btn');
     const relatedEmptyMessage = document.getElementById('related-empty-message');
-    const relatedCenterTitleEl = document.getElementById('related-center-title');
     const outgoingDetails = document.getElementById('outgoing-details');
     const outgoingListEl = document.getElementById('outgoing-list');
     const backlinksDetails = document.getElementById('backlinks-details');
@@ -562,8 +604,6 @@
         return;
       }
 
-      relatedCenterTitleEl.textContent = note.title.trim() === '' ? '無題' : note.title;
-
       const outgoing = getOutgoingNotes(note, notes);
       outgoingListEl.innerHTML = '';
       outgoing.forEach((n) => outgoingListEl.appendChild(createNoteLinkButton(n)));
@@ -579,10 +619,52 @@
       relatedEmptyMessage.hidden = outgoing.length > 0 || backlinks.length > 0;
     }
 
+    function resolveDuplicateTitle(noteId) {
+      const note = notes.find((n) => n.id === noteId);
+      if (!note) {
+        return false;
+      }
+
+      const trimmedTitle = note.title.trim();
+      const baseTitle = trimmedTitle === '' ? '無題' : trimmedTitle;
+      const isDuplicate = notes.some((n) => n.id !== note.id && n.title.trim() === baseTitle);
+
+      // タイトルが空でなく、かつ重複もなければ何もしない
+      if (trimmedTitle !== '' && !isDuplicate) {
+        return false;
+      }
+
+      let finalTitle = baseTitle;
+      if (isDuplicate) {
+        let counter = 1;
+        let candidate;
+        do {
+          candidate = `${baseTitle}_${String(counter).padStart(2, '0')}`;
+          counter += 1;
+        } while (notes.some((n) => n.id !== note.id && n.title.trim() === candidate));
+        finalTitle = candidate;
+      }
+
+      note.title = finalTitle;
+      note.updatedAt = Date.now();
+      saveNotes(notes);
+      if (noteId === currentNoteId) {
+        titleInput.value = finalTitle;
+        renderRelatedNotes();
+      }
+      announce(isDuplicate
+        ? `タイトルが重複していたため「${finalTitle}」に設定しました`
+        : `タイトルを「${finalTitle}」に設定しました`);
+      return true;
+    }
+
     function openEditor(noteId) {
       const note = notes.find((n) => n.id === noteId);
       if (!note) {
         return;
+      }
+      if (currentNoteId && currentNoteId !== noteId) {
+        resolveDuplicateTitle(currentNoteId);
       }
       currentNoteId = noteId;
       titleInput.value = note.title;
@@ -594,6 +676,7 @@
 
     function closeEditor() {
       const noteId = currentNoteId;
+      resolveDuplicateTitle(noteId);
       currentNoteId = null;
       renderNoteList();
       showView('list');
@@ -614,7 +697,10 @@
 
     function handleExplicitSave() {
       handleEditorInput();
-      announce('保存しました');
+      const renamed = resolveDuplicateTitle(currentNoteId);
+      if (!renamed) {
+        announce('保存しました');
+      }
     }
 
     // --- イベント登録 -------------------------------------------------
