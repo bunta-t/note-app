@@ -8,8 +8,10 @@
     :root {
       color-scheme: light dark;
       --focus-color: #2563eb;
+      --focus-bg: #dbeafe;
       --border-color: #ccc;
       --danger-color: #b91c1c;
+      --link-color: #5b21b6;
     }
 
     * {
@@ -18,7 +20,7 @@
 
     body {
       font-family: system-ui, "Hiragino Kaku Gothic ProN", sans-serif;
-      font-size: 1.05rem;
+      font-size: 1.125rem;
       line-height: 1.6;
       margin: 0;
       padding: 1.5rem;
@@ -49,8 +51,14 @@
     }
 
     :focus-visible {
-      outline: 3px solid var(--focus-color);
-      outline-offset: 2px;
+      outline: 4px solid var(--focus-color);
+      outline-offset: 3px;
+    }
+
+    button:focus-visible,
+    input:focus-visible,
+    textarea:focus-visible {
+      background-color: var(--focus-bg);
     }
 
     #new-note-btn {
@@ -95,7 +103,7 @@
     }
 
     .note-updated {
-      font-size: 0.85rem;
+      font-size: 0.9rem;
       color: #555;
     }
 
@@ -147,6 +155,60 @@
       resize: vertical;
     }
 
+    .related-section {
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      padding: 1rem;
+      background: #f7f7f7;
+    }
+
+    .related-center {
+      margin-bottom: 0.75rem;
+    }
+
+    .related-center-label {
+      display: block;
+      font-size: 0.9rem;
+      color: #555;
+    }
+
+    .related-center-title {
+      display: block;
+      font-size: 1.3rem;
+      font-weight: bold;
+    }
+
+    .related-section details {
+      margin-top: 0.75rem;
+    }
+
+    .related-section summary {
+      font-weight: bold;
+      cursor: pointer;
+      padding: 0.25rem 0;
+    }
+
+    .related-section ul {
+      list-style: none;
+      margin: 0.5rem 0 0;
+      padding: 0;
+    }
+
+    .related-section li {
+      margin-bottom: 0.4rem;
+    }
+
+    .note-link {
+      display: inline-block;
+      color: var(--link-color);
+      text-decoration: underline;
+      background: none;
+      border: none;
+      padding: 0.3rem 0.2rem;
+      font: inherit;
+      cursor: pointer;
+    }
+
     dialog {
       border: none;
       border-radius: 8px;
@@ -178,6 +240,11 @@
     }
 
     @media (prefers-color-scheme: dark) {
+      :root {
+        --focus-bg: transparent;
+        --link-color: #c4b5fd;
+      }
+
       body {
         background: #111;
         color: #eee;
@@ -188,7 +255,8 @@
       dialog,
       .dialog-actions button,
       #title-input,
-      #body-input {
+      #body-input,
+      .related-section {
         background: #1c1c1c;
         color: #eee;
         border-color: #444;
@@ -202,7 +270,8 @@
         border-left-color: #444;
       }
 
-      .note-updated {
+      .note-updated,
+      .related-center-label {
         color: #aaa;
       }
     }
@@ -225,6 +294,24 @@
         <label for="title-input">タイトル</label>
         <input id="title-input" type="text">
       </div>
+
+      <section aria-labelledby="related-heading" class="related-section">
+        <h2 id="related-heading">関連ノート</h2>
+        <p id="related-empty-message" hidden>関連ノートはありません</p>
+        <div class="related-center">
+          <span class="related-center-label">選択中のノート</span>
+          <span id="related-center-title" class="related-center-title"></span>
+        </div>
+        <details id="outgoing-details" open>
+          <summary>参照しているノート</summary>
+          <ul id="outgoing-list"></ul>
+        </details>
+        <details id="backlinks-details" open>
+          <summary>参照されているノート(backlinks)</summary>
+          <ul id="backlinks-list"></ul>
+        </details>
+      </section>
+
       <div class="field">
         <label for="body-input">本文</label>
         <textarea id="body-input"></textarea>
@@ -260,6 +347,12 @@
     const deleteMessageEl = document.getElementById('delete-dialog-message');
     const deleteCancelBtn = document.getElementById('delete-cancel-btn');
     const deleteConfirmBtn = document.getElementById('delete-confirm-btn');
+    const relatedEmptyMessage = document.getElementById('related-empty-message');
+    const relatedCenterTitleEl = document.getElementById('related-center-title');
+    const outgoingDetails = document.getElementById('outgoing-details');
+    const outgoingListEl = document.getElementById('outgoing-list');
+    const backlinksDetails = document.getElementById('backlinks-details');
+    const backlinksListEl = document.getElementById('backlinks-list');
 
     // --- データ層 -------------------------------------------------
 
@@ -282,6 +375,43 @@
 
     function sortByUpdatedDesc(list) {
       return [...list].sort((a, b) => b.updatedAt - a.updatedAt);
+    }
+
+    function extractLinkTitles(text) {
+      const pattern = /\[\[([^\[\]]+)\]\]/g;
+      const titles = [];
+      let match;
+      while ((match = pattern.exec(text)) !== null) {
+        titles.push(match[1].trim());
+      }
+      return titles;
+    }
+
+    function findNoteByTitle(title, allNotes) {
+      return allNotes.find((n) => n.title.trim() === title);
+    }
+
+    function getOutgoingNotes(note, allNotes) {
+      const linkedTitles = extractLinkTitles(note.body);
+      const result = [];
+      const seenIds = new Set();
+      linkedTitles.forEach((title) => {
+        const target = findNoteByTitle(title, allNotes);
+        if (target && target.id !== note.id && !seenIds.has(target.id)) {
+          seenIds.add(target.id);
+          result.push(target);
+        }
+      });
+      return result;
+    }
+
+    function getBacklinkNotes(note, allNotes) {
+      return allNotes.filter((other) => {
+        if (other.id === note.id) {
+          return false;
+        }
+        return getOutgoingNotes(other, allNotes).some((n) => n.id === note.id);
+      });
     }
 
     // --- 共通 -----------------------------------------------------
@@ -415,6 +545,40 @@
 
     // --- 編集画面 ---------------------------------------------------
 
+    function createNoteLinkButton(note) {
+      const li = document.createElement('li');
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'note-link';
+      btn.textContent = note.title.trim() === '' ? '無題' : note.title;
+      btn.addEventListener('click', () => openEditor(note.id));
+      li.appendChild(btn);
+      return li;
+    }
+
+    function renderRelatedNotes() {
+      const note = notes.find((n) => n.id === currentNoteId);
+      if (!note) {
+        return;
+      }
+
+      relatedCenterTitleEl.textContent = note.title.trim() === '' ? '無題' : note.title;
+
+      const outgoing = getOutgoingNotes(note, notes);
+      outgoingListEl.innerHTML = '';
+      outgoing.forEach((n) => outgoingListEl.appendChild(createNoteLinkButton(n)));
+      outgoingDetails.hidden = outgoing.length === 0;
+      outgoingDetails.querySelector('summary').textContent = `参照しているノート (${outgoing.length})`;
+
+      const backlinks = getBacklinkNotes(note, notes);
+      backlinksListEl.innerHTML = '';
+      backlinks.forEach((n) => backlinksListEl.appendChild(createNoteLinkButton(n)));
+      backlinksDetails.hidden = backlinks.length === 0;
+      backlinksDetails.querySelector('summary').textContent = `参照されているノート(backlinks) (${backlinks.length})`;
+
+      relatedEmptyMessage.hidden = outgoing.length > 0 || backlinks.length > 0;
+    }
+
     function openEditor(noteId) {
       const note = notes.find((n) => n.id === noteId);
       if (!note) {
@@ -423,6 +587,7 @@
       currentNoteId = noteId;
       titleInput.value = note.title;
       bodyInput.value = note.body;
+      renderRelatedNotes();
       showView('editor');
       titleInput.focus();
     }
@@ -444,6 +609,7 @@
       note.body = bodyInput.value;
       note.updatedAt = Date.now();
       saveNotes(notes);
+      renderRelatedNotes();
     }
 
     function handleExplicitSave() {
