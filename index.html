@@ -13,6 +13,8 @@
       --danger-color: #b91c1c;
       --link-color: #5b21b6;
       --tag-color: #166534;
+      --code-bg: #eee;
+      --external-link-color: #0e7490;
     }
 
     * {
@@ -323,6 +325,50 @@
       text-decoration: underline;
     }
 
+    /* Markdown装飾 */
+    .md-bold { font-weight: bold; }
+    .md-italic { font-style: italic; }
+
+    .md-code {
+      font-family: ui-monospace, monospace;
+      background: var(--code-bg);
+      padding: 0.1em 0.3em;
+      border-radius: 4px;
+    }
+
+    .md-blockquote {
+      border-left: 4px solid var(--border-color);
+      padding-left: 0.75rem;
+      color: #555;
+    }
+
+    .md-heading-1 { font-size: 1.5em; font-weight: bold; }
+    .md-heading-2 { font-size: 1.3em; font-weight: bold; }
+    .md-heading-3 { font-size: 1.15em; font-weight: bold; }
+
+    .md-list-marker { font-weight: bold; }
+
+    .md-fold-toggle {
+      border: none;
+      background: none;
+      cursor: pointer;
+      padding: 0 0.3em;
+      font-size: 0.9em;
+    }
+
+    .md-checkbox input {
+      width: 1.2em;
+      height: 1.2em;
+      margin-right: 0.3em;
+      vertical-align: middle;
+    }
+
+    .md-external-link {
+      color: var(--external-link-color);
+      text-decoration: underline;
+      cursor: pointer;
+    }
+
     /* [[ / :: のサジェストポップアップ。本文と同じ18px以上のフォントを継承する。 */
     .cm-tooltip-autocomplete {
       font: inherit;
@@ -415,6 +461,8 @@
         --focus-bg: transparent;
         --link-color: #c4b5fd;
         --tag-color: #86efac;
+        --code-bg: #2a2a2a;
+        --external-link-color: #67e8f9;
       }
 
       body {
@@ -454,6 +502,10 @@
       }
 
       .note-updated {
+        color: #aaa;
+      }
+
+      .md-blockquote {
         color: #aaa;
       }
     }
@@ -523,9 +575,18 @@
     // ?deps=... は、複数の import URL 間で @codemirror/state / @codemirror/view / @codemirror/language の
     // バージョンがズレて二重に読み込まれる既知の問題(instanceofが壊れる)を防ぐための指定。
     import { EditorView, minimalSetup } from 'https://esm.sh/codemirror@6.0.2?deps=@codemirror/state@6.7.1,@codemirror/view@6.43.6,@codemirror/language@6.12.4';
-    import { EditorState } from 'https://esm.sh/@codemirror/state@6.7.1';
-    import { Decoration, ViewPlugin, MatchDecorator } from 'https://esm.sh/@codemirror/view@6.43.6?deps=@codemirror/state@6.7.1';
+    import { EditorState, RangeSetBuilder } from 'https://esm.sh/@codemirror/state@6.7.1';
+    import { Decoration, ViewPlugin, MatchDecorator, WidgetType, keymap } from 'https://esm.sh/@codemirror/view@6.43.6?deps=@codemirror/state@6.7.1';
     import { autocompletion, completionStatus } from 'https://esm.sh/@codemirror/autocomplete@6.20.3?deps=@codemirror/state@6.7.1,@codemirror/view@6.43.6,@codemirror/language@6.12.4';
+    // 見出し折りたたみ用(@codemirror/language の fold API)
+    import {
+      foldService,
+      codeFolding,
+      foldable,
+      foldEffect,
+      unfoldEffect,
+      foldedRanges,
+    } from 'https://esm.sh/@codemirror/language@6.12.4?deps=@codemirror/state@6.7.1,@codemirror/view@6.43.6';
     // Fuse.js: サジェスト候補のあいまい一致(文字列類似度)判定に使う
     import Fuse from 'https://esm.sh/fuse.js@7.5.0';
 
@@ -589,6 +650,392 @@
         this.decorations = tagMatcher.updateDeco(update, this.decorations);
       }
     }, { decorations: (instance) => instance.decorations });
+
+    // --- Markdown装飾(インライン記法) -------------------------------
+
+    // 記号部分(**, *, `)を Decoration.replace({}) で非表示にし、中身だけを
+    // Decoration.mark で装飾する共通ヘルパー。MatchDecorator は「マッチ全体」に
+    // 1つの装飾しか付けられないため、記号と中身で別々の装飾を作るには手動で
+    // RangeSetBuilder を組み立てる(外部リンクの実装と同じ考え方)。
+    function buildDelimitedDecorations(view, pattern, markerLength, className) {
+      const builder = new RangeSetBuilder();
+      for (const { from, to } of view.visibleRanges) {
+        const text = view.state.doc.sliceString(from, to);
+        pattern.lastIndex = 0;
+        let match;
+        while ((match = pattern.exec(text))) {
+          const start = from + match.index;
+          const contentStart = start + markerLength;
+          const contentEnd = contentStart + match[1].length;
+          const end = contentEnd + markerLength;
+          builder.add(start, contentStart, Decoration.replace({}));
+          builder.add(contentStart, contentEnd, Decoration.mark({ class: className }));
+          builder.add(contentEnd, end, Decoration.replace({}));
+        }
+      }
+      return builder.finish();
+    }
+
+    function makeDelimitedPlugin(pattern, markerLength, className) {
+      return ViewPlugin.fromClass(class {
+        constructor(view) {
+          this.decorations = buildDelimitedDecorations(view, pattern, markerLength, className);
+        }
+        update(update) {
+          if (update.docChanged || update.viewportChanged) {
+            this.decorations = buildDelimitedDecorations(update.view, pattern, markerLength, className);
+          }
+        }
+      }, { decorations: (instance) => instance.decorations });
+    }
+
+    // 太字 **text**(記号2文字ぶんを隠す)
+    const boldPlugin = makeDelimitedPlugin(/\*\*([^*]+)\*\*/g, 2, 'md-bold');
+
+    // 斜体 *text*(記号1文字ぶんを隠す。直前直後がもう1つの * ではないことを
+    // 否定先読み/後読みで確認し、**bold** の内側を誤って斜体と判定しないようにする)
+    const italicPlugin = makeDelimitedPlugin(/(?<!\*)\*(?!\*)([^*]+)(?<!\*)\*(?!\*)/g, 1, 'md-italic');
+
+    // インラインコード `code`(記号1文字ぶんを隠す)
+    const codePlugin = makeDelimitedPlugin(/`([^`]+)`/g, 1, 'md-code');
+
+    // --- Markdown装飾(外部リンク) -----------------------------------
+
+    // 外部リンク [表示テキスト](URL) の "表示テキスト" 部分だけを装飾する。
+    // マッチ全体ではなく表示テキスト部分の位置を計算する必要があるため、
+    // MatchDecorator ではなく手動でRangeSetBuilderを組み立てる。
+    const externalLinkPattern = /\[([^\[\]]+)\]\(([^()]+)\)/g;
+
+    function buildExternalLinkDecorations(view) {
+      const builder = new RangeSetBuilder();
+      for (const { from, to } of view.visibleRanges) {
+        const text = view.state.doc.sliceString(from, to);
+        externalLinkPattern.lastIndex = 0;
+        let match;
+        while ((match = externalLinkPattern.exec(text))) {
+          const label = match[1];
+          const url = match[2];
+          const labelStart = from + match.index + 1; // "[" の次から
+          const labelEnd = labelStart + label.length;
+          builder.add(labelStart, labelEnd, Decoration.mark({
+            class: 'md-external-link',
+            tagName: 'span',
+            attributes: {
+              tabindex: '0',
+              role: 'link',
+              'aria-label': `(${label})、新しいタブで開きます`,
+              'data-url': url,
+            },
+          }));
+        }
+      }
+      return builder.finish();
+    }
+
+    function openExternalLink(url) {
+      // noopener,noreferrer: 新しいタブから元のページ(window.opener)を
+      // 操作されないようにするための安全策(タブナビング対策)
+      window.open(url, '_blank', 'noopener,noreferrer');
+    }
+
+    const externalLinkPlugin = ViewPlugin.fromClass(class {
+      constructor(view) {
+        this.decorations = buildExternalLinkDecorations(view);
+      }
+      update(update) {
+        if (update.docChanged || update.viewportChanged) {
+          this.decorations = buildExternalLinkDecorations(update.view);
+        }
+      }
+    }, {
+      decorations: (instance) => instance.decorations,
+      eventHandlers: {
+        click(event) {
+          const target = event.target.closest('.md-external-link');
+          if (target) {
+            openExternalLink(target.dataset.url);
+          }
+        },
+        // Enterキーでの操作は handleEditorEnter(document.activeElementを直接調べる
+        // キーマップコマンド)で行う。理由は handleEditorEnter の定義コメントを参照。
+      },
+    });
+
+    // --- Markdown装飾(行単位の記法: 見出し・引用・リスト・チェックボックス) ---
+
+    function matchHeading(lineText) {
+      return /^(#{1,3})\s+/.exec(lineText); // レベルはグループ1の文字数(1〜3)
+    }
+    function matchCheckbox(lineText) {
+      return /^-\s+\[([ xX])\]\s?/.exec(lineText);
+    }
+    function matchBullet(lineText) {
+      return /^-\s+/.exec(lineText);
+    }
+    function matchNumbered(lineText) {
+      return /^(\d+)(\.)\s+/.exec(lineText); // 仕様の "1. item" 形式のみ対応
+    }
+    function matchBlockquote(lineText) {
+      return /^>\s?/.exec(lineText);
+    }
+
+    // 折りたたみ済みかどうかを調べる。foldedRanges(state) はCM6が管理する
+    // 「現在折りたたまれている範囲」のDecorationSetで、between()で該当位置を調べられる。
+    function getFoldedRange(state, line) {
+      let found = null;
+      foldedRanges(state).between(line.to, line.to, (from, to) => {
+        found = { from, to };
+        return false; // 見つかったら走査を打ち切る
+      });
+      return found;
+    }
+
+    // チェックボックス用ウィジェット。公式ドキュメントのチェックボックス例と同じ構成:
+    // 実体の <input type="checkbox"> を <span> で包む(Firefoxがcontenteditable内の
+    // チェックボックスを正しく扱えないための回避策)。
+    class CheckboxWidget extends WidgetType {
+      constructor(checked) {
+        super();
+        this.checked = checked;
+      }
+      eq(other) {
+        return other.checked === this.checked;
+      }
+      toDOM() {
+        const wrap = document.createElement('span');
+        wrap.className = 'md-checkbox';
+        const box = wrap.appendChild(document.createElement('input'));
+        box.type = 'checkbox';
+        box.checked = this.checked;
+        box.setAttribute('aria-label', this.checked ? 'チェック済み' : '未チェック');
+        return wrap;
+      }
+      ignoreEvent() {
+        return false; // falseにすることでクリック/キー操作をCodeMirrorに奪われず処理できる
+      }
+    }
+
+    // 見出し折りたたみトグル用ウィジェット。実体の <button> なので既存の
+    // :focus-visible / button:focus-visible がそのまま効き、Tab到達・Enter/Space操作も
+    // 追加コードなしで満たせる。
+    class FoldToggleWidget extends WidgetType {
+      constructor(folded) {
+        super();
+        this.folded = folded;
+      }
+      eq(other) {
+        return other.folded === this.folded;
+      }
+      toDOM() {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'md-fold-toggle';
+        btn.textContent = this.folded ? '▶' : '▼';
+        btn.setAttribute('aria-label', this.folded ? '見出しを展開' : '見出しを折りたたむ');
+        return btn;
+      }
+      ignoreEvent() {
+        return false;
+      }
+    }
+
+    function buildMarkdownBlockDecorations(view) {
+      const builder = new RangeSetBuilder();
+      const { state } = view;
+      for (const { from, to } of view.visibleRanges) {
+        let pos = from;
+        while (pos <= to) {
+          const line = state.doc.lineAt(pos);
+          const headingMatch = matchHeading(line.text);
+          const checkboxMatch = !headingMatch && matchCheckbox(line.text);
+          const bulletMatch = !headingMatch && !checkboxMatch && matchBullet(line.text);
+          const numberedMatch = !headingMatch && !checkboxMatch && !bulletMatch && matchNumbered(line.text);
+          const blockquoteMatch = !headingMatch && !checkboxMatch && !bulletMatch && !numberedMatch && matchBlockquote(line.text);
+
+          if (headingMatch) {
+            const level = headingMatch[1].length;
+            const markerLength = headingMatch[0].length; // "# " や "### " の長さ
+            const foldedRange = getFoldedRange(state, line);
+            builder.add(line.from, line.from, Decoration.widget({ widget: new FoldToggleWidget(Boolean(foldedRange)), side: -1 }));
+            builder.add(line.from, line.from + markerLength, Decoration.replace({}));
+            builder.add(line.from + markerLength, line.to, Decoration.mark({ class: `md-heading md-heading-${level}` }));
+          } else if (checkboxMatch) {
+            const bracketStart = line.from + checkboxMatch[0].indexOf('[');
+            const bracketEnd = bracketStart + 3; // "[ ]" / "[x]" は3文字
+            const checked = checkboxMatch[1].toLowerCase() === 'x';
+            builder.add(bracketStart, bracketEnd, Decoration.replace({ widget: new CheckboxWidget(checked) }));
+          } else if (bulletMatch) {
+            builder.add(line.from, line.from + bulletMatch[0].length, Decoration.mark({ class: 'md-list-marker' }));
+          } else if (numberedMatch) {
+            builder.add(line.from, line.from + numberedMatch[0].length, Decoration.mark({ class: 'md-list-marker' }));
+          } else if (blockquoteMatch) {
+            builder.add(line.from, line.from, Decoration.line({ class: 'md-blockquote' }));
+          }
+
+          pos = line.to + 1;
+        }
+      }
+      return builder.finish();
+    }
+
+    function toggleHeadingFold(view, line) {
+      const foldedRange = getFoldedRange(view.state, line);
+      if (foldedRange) {
+        view.dispatch({ effects: unfoldEffect.of(foldedRange) });
+        return;
+      }
+      const range = foldable(view.state, line.from, line.to); // 登録した foldService が呼ばれる
+      if (range) {
+        view.dispatch({ effects: foldEffect.of(range) });
+      }
+    }
+
+    function toggleCheckbox(view, pos) {
+      const line = view.state.doc.lineAt(pos);
+      const match = matchCheckbox(line.text);
+      if (!match) {
+        return;
+      }
+      const bracketStart = line.from + match[0].indexOf('[');
+      const checked = match[1].toLowerCase() === 'x';
+      view.dispatch({
+        changes: { from: bracketStart + 1, to: bracketStart + 2, insert: checked ? ' ' : 'x' },
+      });
+    }
+
+    const markdownBlockPlugin = ViewPlugin.fromClass(class {
+      constructor(view) {
+        this.decorations = buildMarkdownBlockDecorations(view);
+      }
+      update(update) {
+        // 折りたたみはドキュメントの文字自体を変えないため、docChanged だけでなく
+        // fold/unfold のエフェクトが流れたときも装飾(トグルの矢印表示)を作り直す。
+        const foldChanged = update.transactions.some((tr) => tr.effects.some((e) => e.is(foldEffect) || e.is(unfoldEffect)));
+        if (update.docChanged || update.viewportChanged || foldChanged) {
+          this.decorations = buildMarkdownBlockDecorations(update.view);
+        }
+      }
+    }, {
+      decorations: (instance) => instance.decorations,
+      eventHandlers: {
+        click(event, view) {
+          if (event.target.tagName === 'INPUT' && event.target.closest('.md-checkbox')) {
+            toggleCheckbox(view, view.posAtDOM(event.target));
+            return;
+          }
+          const foldBtn = event.target.closest('.md-fold-toggle');
+          if (foldBtn) {
+            const line = view.state.doc.lineAt(view.posAtDOM(foldBtn));
+            toggleHeadingFold(view, line);
+          }
+        },
+        // Enterキーでの操作は handleEditorEnter(document.activeElementを直接調べる
+        // キーマップコマンド)で行う。理由は handleEditorEnter の定義コメントを参照。
+      },
+    });
+
+    // 見出しの折りたたみ範囲を決めるfoldService。
+    // state.doc.lineAt(lineStart) で行を取り出し、見出し行なら「次の同レベル以上の
+    // 見出し行の手前まで」を折りたたみ範囲として返す。見出しでない、または
+    // 折りたたむ内容が無ければ null を返す(foldServiceの仕様)。
+    function headingFoldService(state, lineStart) {
+      const line = state.doc.lineAt(lineStart);
+      const match = matchHeading(line.text);
+      if (!match) {
+        return null;
+      }
+      const level = match[1].length;
+      let scan = line;
+      while (scan.number < state.doc.lines) {
+        scan = state.doc.line(scan.number + 1);
+        const nextMatch = matchHeading(scan.text);
+        if (nextMatch && nextMatch[1].length <= level) {
+          const prevLine = state.doc.line(scan.number - 1);
+          return prevLine.to > line.to ? { from: line.to, to: prevLine.to } : null;
+        }
+      }
+      return state.doc.length > line.to ? { from: line.to, to: state.doc.length } : null;
+    }
+
+    // --- Markdownリストの Enter 自動継続 -------------------------------
+
+    // Enterキーの独自コマンド。リスト行の末尾でなければ false を返し、通常のEnter処理に
+    // フォールバックする(CodeMirrorのキーマップは、コマンドが false を返すと次の
+    // キーバインドを試す仕組みになっている)。
+    function handleListEnter(view) {
+      const { state } = view;
+      const pos = state.selection.main.head;
+      const line = state.doc.lineAt(pos);
+      if (pos !== line.to || !state.selection.main.empty) {
+        return false; // 行末で選択なしの場合のみ扱う
+      }
+
+      const checkboxMatch = matchCheckbox(line.text);
+      const bulletMatch = !checkboxMatch && matchBullet(line.text);
+      const numberedMatch = !checkboxMatch && !bulletMatch && matchNumbered(line.text);
+
+      if (checkboxMatch) {
+        const rest = line.text.slice(checkboxMatch[0].length);
+        if (rest.trim() === '') {
+          view.dispatch({ changes: { from: line.from, to: line.to, insert: '' } });
+          return true;
+        }
+        view.dispatch({ changes: { from: pos, insert: '\n- [ ] ' }, selection: { anchor: pos + 7 } });
+        return true;
+      }
+      if (bulletMatch) {
+        const rest = line.text.slice(bulletMatch[0].length);
+        if (rest.trim() === '') {
+          view.dispatch({ changes: { from: line.from, to: line.to, insert: '' } });
+          return true;
+        }
+        view.dispatch({ changes: { from: pos, insert: '\n- ' }, selection: { anchor: pos + 3 } });
+        return true;
+      }
+      if (numberedMatch) {
+        const rest = line.text.slice(numberedMatch[0].length);
+        if (rest.trim() === '') {
+          view.dispatch({ changes: { from: line.from, to: line.to, insert: '' } });
+          return true;
+        }
+        const marker = `${Number(numberedMatch[1]) + 1}${numberedMatch[2]} `;
+        view.dispatch({ changes: { from: pos, insert: `\n${marker}` }, selection: { anchor: pos + 1 + marker.length } });
+        return true;
+      }
+      return false;
+    }
+
+    // Enterキーの入り口となるコマンド。折りたたみトグル・チェックボックス・外部リンクは
+    // それぞれ独立したDOM要素(<button>/<input>/tabindex付きの<span>)にキーボード
+    // フォーカスが乗るが、CodeMirrorの本文カーソル位置(state.selection)はそれとは
+    // 連動しない。そのため「今どの要素にキーボードフォーカスがあるか」を
+    // document.activeElement で直接調べ、該当すればそれぞれのトグル処理を行って
+    // true を返す(true を返すとCodeMirrorはこのキー入力を「処理済み」とみなし、
+    // 既定のEnter処理(改行)を行わない)。該当しなければ通常通り handleListEnter に
+    // 処理を委ねる。
+    // 補足: このコマンドは bodyExtensions の先頭近くに置く必要がある。CodeMirrorは
+    // keymap/eventHandlers を拡張の並び順で優先度づけするため、後ろの方に書いた
+    // 処理(以前はここを markdownBlockPlugin 側の eventHandlers.keydown に書いていた)
+    // は、先に並ぶ既定のEnterキーマップに処理を奪われ、実行されないことがある。
+    function handleEditorEnter(view) {
+      const active = document.activeElement;
+      if (active) {
+        if (active.classList.contains('md-fold-toggle')) {
+          const line = view.state.doc.lineAt(view.posAtDOM(active));
+          toggleHeadingFold(view, line);
+          return true;
+        }
+        if (active.tagName === 'INPUT' && active.closest('.md-checkbox')) {
+          toggleCheckbox(view, view.posAtDOM(active));
+          return true;
+        }
+        if (active.classList.contains('md-external-link')) {
+          openExternalLink(active.dataset.url);
+          return true;
+        }
+      }
+      return handleListEnter(view);
+    }
 
     // --- サジェスト候補(Fuse.js) -------------------------------------
 
@@ -697,10 +1144,22 @@
     }
 
     const bodyExtensions = [
+      // Enterキーバインドは minimalSetup より前に置き、既定のEnter処理
+      // (insertNewlineAndIndent、minimalSetup内のキーマップにある)より先に試させる。
+      // サジェスト機能の autocompletion() は内部で Prec.highest を使いEnterを最優先で
+      // 奪う設計なので、配列内の順序に関わらず候補表示中はそちらが先に処理される。
+      keymap.of([{ key: 'Enter', run: handleEditorEnter }]),
       minimalSetup,
       EditorView.lineWrapping, // textarea同様、長い行を折り返す(CodeMirrorは既定では折り返さない)
       linkHighlightPlugin,
       tagHighlightPlugin,
+      boldPlugin,
+      italicPlugin,
+      codePlugin,
+      externalLinkPlugin,
+      markdownBlockPlugin,
+      foldService.of(headingFoldService),
+      codeFolding(),
       // override で、この2つのソースだけが候補を出すようにする
       autocompletion({ override: [linkCompletionSource, tagCompletionSource] }),
       EditorView.contentAttributes.of({ 'aria-labelledby': 'body-label' }),
