@@ -717,6 +717,7 @@
           const url = match[2];
           const labelStart = from + match.index + 1; // "[" の次から
           const labelEnd = labelStart + label.length;
+          const matchEnd = from + match.index + match[0].length; // [表示テキスト](URL) 全体の直後
           builder.add(labelStart, labelEnd, Decoration.mark({
             class: 'md-external-link',
             tagName: 'span',
@@ -725,6 +726,7 @@
               role: 'link',
               'aria-label': `(${label})、新しいタブで開きます`,
               'data-url': url,
+              'data-end': String(matchEnd),
             },
           }));
         }
@@ -732,10 +734,15 @@
       return builder.finish();
     }
 
-    function openExternalLink(url) {
+    function openExternalLink(view, target) {
       // noopener,noreferrer: 新しいタブから元のページ(window.opener)を
       // 操作されないようにするための安全策(タブナビング対策)
-      window.open(url, '_blank', 'noopener,noreferrer');
+      window.open(target.dataset.url, '_blank', 'noopener,noreferrer');
+      // 操作後はフォーカスがリンク要素(<span tabindex="0">)に移りCodeMirrorの
+      // カーソルが見えなくなるため、リンク全体の直後にカーソルを戻し
+      // エディタへフォーカスを戻す。
+      view.dispatch({ selection: { anchor: Number(target.dataset.end) } });
+      view.focus();
     }
 
     const externalLinkPlugin = ViewPlugin.fromClass(class {
@@ -750,10 +757,10 @@
     }, {
       decorations: (instance) => instance.decorations,
       eventHandlers: {
-        click(event) {
+        click(event, view) {
           const target = event.target.closest('.md-external-link');
           if (target) {
-            openExternalLink(target.dataset.url);
+            openExternalLink(view, target);
           }
         },
         // Enterキーでの操作は handleEditorEnter(document.activeElementを直接調べる
@@ -880,27 +887,38 @@
 
     function toggleHeadingFold(view, line) {
       const foldedRange = getFoldedRange(view.state, line);
+      let effect = null;
       if (foldedRange) {
-        view.dispatch({ effects: unfoldEffect.of(foldedRange) });
-        return;
+        effect = unfoldEffect.of(foldedRange);
+      } else {
+        const range = foldable(view.state, line.from, line.to); // 登録した foldService が呼ばれる
+        if (range) {
+          effect = foldEffect.of(range);
+        }
       }
-      const range = foldable(view.state, line.from, line.to); // 登録した foldService が呼ばれる
-      if (range) {
-        view.dispatch({ effects: foldEffect.of(range) });
-      }
+      // 操作後はフォーカスがトグルボタン(<button>)に移りCodeMirrorのカーソルが
+      // 見えなくなるため、操作した見出し行の末尾にカーソルを戻し、
+      // エディタへフォーカスを戻す。
+      view.dispatch(effect ? { effects: effect, selection: { anchor: line.to } } : { selection: { anchor: line.to } });
+      view.focus();
     }
 
     function toggleCheckbox(view, pos) {
       const line = view.state.doc.lineAt(pos);
       const match = matchCheckbox(line.text);
       if (!match) {
+        view.focus();
         return;
       }
       const bracketStart = line.from + match[0].indexOf('[');
       const checked = match[1].toLowerCase() === 'x';
+      // 操作後はフォーカスがチェックボックス(<input>)に移りCodeMirrorのカーソルが
+      // 見えなくなるため、操作した行の末尾にカーソルを戻し、エディタへフォーカスを戻す。
       view.dispatch({
         changes: { from: bracketStart + 1, to: bracketStart + 2, insert: checked ? ' ' : 'x' },
+        selection: { anchor: line.to },
       });
+      view.focus();
     }
 
     const markdownBlockPlugin = ViewPlugin.fromClass(class {
@@ -1030,7 +1048,7 @@
           return true;
         }
         if (active.classList.contains('md-external-link')) {
-          openExternalLink(active.dataset.url);
+          openExternalLink(view, active);
           return true;
         }
       }
@@ -1121,6 +1139,23 @@
       if (!match) {
         return null;
       }
+
+      // このマッチした "::" が「新しいタグの開始」なのか、直前のタグの「閉じマーカー」
+      // なのかを判定する。:: は開始・終了で同じ文字列のため区別が付きにくいので、
+      // 同じ行内の、このマッチより前にある "::" の出現回数を数える。
+      // 例: "これは::機械学習::と::深層学習" でカーソルが末尾にあるとき、マッチしたのは
+      // "深層学習"の前の"::"。その前方には"::機械学習::"で"::"が2個(偶数)あり、
+      // 閉じられたペアが揃っているので、今回の"::"は新しい開始マーカーと判断できる。
+      // 逆に "これは::機械学習::" で末尾にカーソルがあるとき、末尾の"::"がマッチし、
+      // その前方には"::"が1個(奇数)しかなく、開いたままの開始マーカーが1つ残っている
+      // ということは、今回マッチした"::"はその「閉じマーカー」だと判断できる。
+      const lineStart = context.state.doc.lineAt(match.from).from;
+      const textBeforeMatch = context.state.doc.sliceString(lineStart, match.from);
+      const colonPairCount = (textBeforeMatch.match(/::/g) || []).length;
+      if (colonPairCount % 2 === 1) {
+        return null; // 閉じマーカーの直後なのでサジェストを出さない
+      }
+
       const query = match.text.slice(2);
       const from = match.from + 2;
       const candidates = getTagSuggestions(query);
