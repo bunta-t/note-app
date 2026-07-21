@@ -528,6 +528,12 @@
       height: auto;
     }
 
+    /* viewBox自体はCSSトランジションが効かないため、内容全体を<g>で包んで
+       transform:translate(...)をなめらかに動かすことでパン(視点追従)を実現する。 */
+    #graph-viewport {
+      transition: transform 0.25s ease-out;
+    }
+
     /* ラベルはクリック/フォーカスを奪わないようにする(円だけを対話的要素にする) */
     #graph-dialog text {
       font-size: 18px;
@@ -539,6 +545,17 @@
       stroke: var(--background-color);
       stroke-width: 4px;
       stroke-linejoin: round;
+      /* 既定では非表示にし、ハブノード/ホバー/フォーカス時だけ表示する(下のセレクタ) */
+      opacity: 0;
+    }
+
+    /* line→circle→text の順にDOMを並べる(修正2)ため、circleとtextはもう隣接しない。
+       ラベルの表示はJS側(updateGraphLabelVisibility)がtextへ直接クラスを付け外しして
+       判定する。上の "#graph-dialog text { opacity: 0; }" はID込みの詳細度(1,0,1)を
+       持つため、ここも #graph-dialog を付けて詳細度を揃えないと負けて常に非表示になる。 */
+    #graph-dialog text.graph-label-hub,
+    #graph-dialog text.graph-label-visible {
+      opacity: 1;
     }
 
     .graph-node {
@@ -552,6 +569,14 @@
       stroke: var(--border-color);
       stroke-width: 1.5;
       stroke-opacity: 0.6;
+    }
+
+    /* フォーカスされたノードから伸びるリンクだけ強調する(修正1)。.graph-edgeと同じ
+       詳細度の単独クラスだと定義順に結果が左右されるため、二重クラスにして確実に勝たせる。 */
+    .graph-edge.graph-edge-highlighted {
+      stroke: var(--focus-color);
+      stroke-width: 3px;
+      stroke-opacity: 1;
     }
 
     @media (prefers-color-scheme: dark) {
@@ -711,10 +736,12 @@
       <button id="graph-reset-btn" type="button" aria-label="ノード配置をリセット">配置をリセット</button>
     </div>
     <p id="graph-status" class="visually-hidden" aria-live="polite"></p>
-    <svg id="graph-svg" viewBox="-400 -300 800 600" width="800" height="600"
+    <svg id="graph-svg" viewBox="500 350 1000 800" width="1000" height="800"
          role="img" aria-label="ノートの関係を示すノードグラフ">
-      <g id="graph-edges"></g>
-      <g id="graph-nodes"></g>
+      <g id="graph-viewport">
+        <g id="graph-edges"></g>
+        <g id="graph-nodes"></g>
+      </g>
     </svg>
   </dialog>
 
@@ -777,6 +804,7 @@
     const graphCloseBtn = document.getElementById('graph-close-btn');
     const graphResetBtn = document.getElementById('graph-reset-btn');
     const graphStatus = document.getElementById('graph-status');
+    const graphViewportGroup = document.getElementById('graph-viewport');
     const graphEdgesGroup = document.getElementById('graph-edges');
     const graphNodesGroup = document.getElementById('graph-nodes');
 
@@ -1627,15 +1655,15 @@
 
     // ノードを円周上に等間隔配置する。初期配置を毎回ランダムにすると動作確認がしづらいため、
     // 決定的な配置にする(モーダルを開くたび・Rキーでリセットするたび同じ初期状態になる)。
-    function initializeNodesInCircle(notesList, radius) {
+    function initializeNodesInCircle(notesList, radius, centerX, centerY) {
       const n = notesList.length;
       return notesList.map((note, i) => {
         const angle = (2 * Math.PI * i) / n;
         return {
           id: note.id,
           note,
-          x: radius * Math.cos(angle),
-          y: radius * Math.sin(angle),
+          x: centerX + radius * Math.cos(angle),
+          y: centerY + radius * Math.sin(angle),
           vx: 0,
           vy: 0,
         };
@@ -1646,7 +1674,7 @@
     // 勾配(=力)を計算し、Symplectic Euler(速度→位置の順に更新)で積分する。
     // 通常のEuler法(位置→速度の順)より、バネのように振動する系で発散しにくいため採用している。
     function simulateStep(nodes, edges, tagSimilarity, params) {
-      const { kRepel, kLink, kTag, restLength, kCenter, damping, mass, dt, maxSpeed } = params;
+      const { kRepel, kLink, kTag, restLength, kCenter, centerX, centerY, damping, mass, dt, maxSpeed } = params;
       const forces = new Map(nodes.map((n) => [n.id, { fx: 0, fy: 0 }]));
 
       // 反発力(全ノードペア、クーロン反発型): F = kRepel / d^2、方向は (xi - xj) の正規化
@@ -1694,10 +1722,10 @@
         }
       }
 
-      // 中心引力: 画面中央(原点)から遠いノードを弱く引き戻し、画面外への発散を防ぐ
+      // 中心引力: キャンバス中央 (centerX, centerY) から遠いノードを弱く引き戻し、発散を防ぐ
       nodes.forEach((node) => {
-        forces.get(node.id).fx += -kCenter * node.x;
-        forces.get(node.id).fy += -kCenter * node.y;
+        forces.get(node.id).fx += -kCenter * (node.x - centerX);
+        forces.get(node.id).fy += -kCenter * (node.y - centerY);
       });
 
       // 運動方程式 m*dv/dt = F - c*v を Symplectic Euler で積分:
@@ -2126,12 +2154,19 @@
 
     // --- ノードグラフモーダル -----------------------------------------
 
+    // 力学モデルは2000×1500の仮想キャンバス空間で計算する。中心引力の目標点・初期円周配置の
+    // 中心はどちらもこのキャンバスの中央 (1000, 750)。表示はviewBoxでこの一部だけを切り取る。
+    const GRAPH_CENTER_X = 1000;
+    const GRAPH_CENTER_Y = 750;
+
     const GRAPH_PARAMS = {
-      kRepel: 8000, // 反発力定数
+      kRepel: 10000, // 反発力定数
       kLink: 0.03, // [[]]リンクによるバネ定数
       kTag: 0.02, // タグ共有(Jaccard係数)によるバネ定数
-      restLength: 160, // バネの自然長 L0
-      kCenter: 0.01, // 中心引力定数
+      restLength: 200, // バネの自然長 L0
+      kCenter: 0.01, // 中心引力定数(ノードがビューポート外にはみ出さないよう強めにしてある)
+      centerX: GRAPH_CENTER_X, // 中心引力の目標点(キャンバス中央)
+      centerY: GRAPH_CENTER_Y,
       damping: 0.85, // 減衰係数(毎ステップ速度に乗算)
       mass: 1,
       dt: 0.1,
@@ -2143,12 +2178,43 @@
     const GRAPH_INIT_RADIUS = 180; // 初期円周配置の半径
     const ARROW_KEY_DIRECTIONS = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' };
     const SVG_NS = 'http://www.w3.org/2000/svg'; // SVG要素は document.createElement ではなく createElementNS で作る
+    const OKABE_ITO_TAG_COLORS = ['#E69F00', '#56B4E9', '#009E73', '#F0E442', '#0072B2', '#D55E00', '#CC79A7'];
+    const OKABE_ITO_FALLBACK_COLOR = '#999999';
+    const GRAPH_HUB_LABEL_THRESHOLD = 2; // この引用数以上のノードは常時ラベル表示する
 
     let graphNodes = [];
     let graphEdges = [];
     let graphTagSimilarity = new Map();
+    let graphSortedTags = [];
+    let graphTagColorMap = new Map();
     let graphAnimationFrameId = null;
     let graphIterationCount = 0;
+
+    // 全ノートのタグ出現頻度を集計し、上位7個にOkabe-Itoカラーを、それ以外に
+    // フォールバック色(#999999)を割り当てる。頻度は1ノートにつき1回だけ数える
+    // (::tag::を複数回書いても水増しされないように Set で重複除去してから数える)。
+    function buildGraphTagColorMap(notesList) {
+      const tagCounts = new Map();
+      notesList.forEach((note) => {
+        new Set(extractTags(note.body)).forEach((tag) => {
+          tagCounts.set(tag, (tagCounts.get(tag) || 0) + 1);
+        });
+      });
+      const sortedTags = [...tagCounts.keys()].sort((a, b) => tagCounts.get(b) - tagCounts.get(a));
+      const colorMap = new Map();
+      sortedTags.forEach((tag, i) => {
+        colorMap.set(tag, i < OKABE_ITO_TAG_COLORS.length ? OKABE_ITO_TAG_COLORS[i] : OKABE_ITO_FALLBACK_COLOR);
+      });
+      return { sortedTags, colorMap };
+    }
+
+    // ノートが持つタグのうち、全体で最も頻出するタグに対応する色を返す。
+    // タグが無ければ null(呼び出し側で --focus-color にフォールバックさせる)。
+    function getGraphNodeColor(note, sortedTags, colorMap) {
+      const noteTags = new Set(extractTags(note.body));
+      const mostFrequentTag = sortedTags.find((tag) => noteTags.has(tag));
+      return mostFrequentTag ? colorMap.get(mostFrequentTag) : null;
+    }
 
     function openGraphModal() {
       setupGraphSimulation();
@@ -2157,13 +2223,31 @@
     }
 
     function setupGraphSimulation() {
-      graphNodes = initializeNodesInCircle(notes, GRAPH_INIT_RADIUS);
+      graphViewportGroup.style.transform = ''; // 前回開いた時のパン位置を持ち越さない
+      graphNodes = initializeNodesInCircle(notes, GRAPH_INIT_RADIUS, GRAPH_CENTER_X, GRAPH_CENTER_Y);
       graphEdges = buildGraphEdges(notes);
       graphTagSimilarity = buildTagSimilarityMap(notes);
+      const { sortedTags, colorMap } = buildGraphTagColorMap(notes);
+      graphSortedTags = sortedTags;
+      graphTagColorMap = colorMap;
       graphIterationCount = 0;
+
+      // デバッグ用: devtoolsのConsoleから直接確認できるようwindowにも公開する。
+      // `Object.keys(tagColorMap)` でタグ名一覧、`tagColorMap` でタグ→色の対応が見える。
+      window.tagColorMap = Object.fromEntries(colorMap);
+      const hubTitles = notes
+        .filter((note) => getCitationCount(note, notes) >= GRAPH_HUB_LABEL_THRESHOLD)
+        .map((note) => note.title);
+      console.log('[graph] tagColorMap:', window.tagColorMap);
+      console.log(`[graph] hub notes (citationCount >= ${GRAPH_HUB_LABEL_THRESHOLD}):`, hubTitles);
+
       renderGraphSvgElements();
     }
 
+    // SVGは後に書かれた要素ほど手前に描画されるため、line→circle→text の順で
+    // 子要素を構成し、ラベルが常にノード・リンクの上に表示されるようにする。
+    // (graph-edgesグループがgraph-nodesグループより先にあるため line は既に circle/text より
+    // 手前に来ない。graph-nodes内部は circle を全部→text を全部、の順に分けて追加する。)
     function renderGraphSvgElements() {
       graphEdgesGroup.innerHTML = '';
       graphNodesGroup.innerHTML = '';
@@ -2171,8 +2255,8 @@
       graphEdges.forEach((edge) => {
         const line = document.createElementNS(SVG_NS, 'line');
         line.setAttribute('class', 'graph-edge');
-        line.dataset.sourceId = edge.sourceId;
-        line.dataset.targetId = edge.targetId;
+        line.dataset.fromId = edge.sourceId;
+        line.dataset.toId = edge.targetId;
         graphEdgesGroup.appendChild(line);
       });
 
@@ -2181,6 +2265,7 @@
       const nodesByCitationDesc = [...notes].sort(
         (a, b) => getCitationCount(b, notes) - getCitationCount(a, notes)
       );
+
       nodesByCitationDesc.forEach((note) => {
         const citationCount = getCitationCount(note, notes);
         const radius = 20 + 5 * Math.min(citationCount, 5);
@@ -2190,18 +2275,34 @@
         circle.setAttribute('id', `graph-node-${note.id}`);
         circle.setAttribute('class', 'graph-node');
         circle.setAttribute('r', String(radius));
-        // 引用数0で薄く、5件以上で最も濃くなるよう不透明度だけを変える(色は増やさない)
-        circle.setAttribute('fill-opacity', String(0.25 + 0.75 * (Math.min(citationCount, 5) / 5)));
+        // 最頻タグの色で塗る。SVGのfill属性(プレゼンテーション属性)はCSSの
+        // クラスセレクタ(.graph-node { fill: ... })より詳細度が低く必ず負けるため、
+        // setAttribute('fill', ...) ではなくインラインスタイルで設定して確実に上書きする。
+        // タグが無ければ既存の --focus-color にフォールバックする。
+        const color = getGraphNodeColor(note, graphSortedTags, graphTagColorMap);
+        circle.style.fill = color || 'var(--focus-color)';
+        if (citationCount >= GRAPH_HUB_LABEL_THRESHOLD) {
+          circle.classList.add('graph-node-hub'); // ハブノードは常時ラベル表示にする
+        }
         circle.setAttribute('tabindex', '0');
         circle.setAttribute('role', 'button');
         circle.setAttribute('aria-label', `${titleText}、${citationCount}件から参照`);
         circle.dataset.noteId = note.id;
         circle.addEventListener('click', () => openGraphNode(note.id));
         graphNodesGroup.appendChild(circle);
+      });
+
+      // text は上のループとは別に、全circleの後にまとめて追加する(line→circle→textの順)。
+      nodesByCitationDesc.forEach((note) => {
+        const citationCount = getCitationCount(note, notes);
+        const titleText = note.title.trim() === '' ? '無題' : note.title;
 
         const text = document.createElementNS(SVG_NS, 'text');
         text.dataset.noteId = note.id;
         text.textContent = titleText;
+        if (citationCount >= GRAPH_HUB_LABEL_THRESHOLD) {
+          text.classList.add('graph-label-hub'); // ハブノードのラベルは常時表示
+        }
         graphNodesGroup.appendChild(text);
       });
     }
@@ -2223,13 +2324,62 @@
         text.setAttribute('y', String(node.y + Number(circle.getAttribute('r')) + 16));
       });
       graphEdgesGroup.querySelectorAll('line').forEach((line) => {
-        const source = graphNodes.find((n) => n.id === line.dataset.sourceId);
-        const target = graphNodes.find((n) => n.id === line.dataset.targetId);
+        const source = graphNodes.find((n) => n.id === line.dataset.fromId);
+        const target = graphNodes.find((n) => n.id === line.dataset.toId);
         line.setAttribute('x1', String(source.x));
         line.setAttribute('y1', String(source.y));
         line.setAttribute('x2', String(target.x));
         line.setAttribute('y2', String(target.y));
       });
+    }
+
+    // ラベルの表示条件(ハブノードは常時、それ以外はフォーカス/ホバー中のみ)を、
+    // circleとtextがDOM上で隣接しなくなった(line→circle→textの順にしたため)ことに合わせ、
+    // CSSの隣接セレクタではなくJSでtext側に直接クラスを付け外しして判定する。
+    function updateGraphLabelVisibility(noteId) {
+      const circle = document.getElementById(`graph-node-${noteId}`);
+      const text = graphNodesGroup.querySelector(`text[data-note-id="${noteId}"]`);
+      if (!circle || !text) {
+        return;
+      }
+      const isFocused = document.activeElement === circle;
+      const isHovered = circle.matches(':hover');
+      text.classList.toggle('graph-label-visible', isFocused || isHovered);
+    }
+
+    // 指定ノードの両端を持つリンクだけ強調表示する(フォーカス時のみ、ホバーは対象外)。
+    function highlightGraphNodeLinks(noteId, highlighted) {
+      graphEdgesGroup.querySelectorAll('line').forEach((line) => {
+        if (line.dataset.fromId === noteId || line.dataset.toId === noteId) {
+          line.classList.toggle('graph-edge-highlighted', highlighted);
+        }
+      });
+    }
+
+    // フォーカスノードが表示の中央に来るよう、内容全体を包む<g>をtranslateで動かす
+    // (viewBox自体はCSSトランジションが効かないため、逆方向に中身を動かして疑似的にパンする)。
+    // viewBoxの中心は常にキャンバス中央 (GRAPH_CENTER_X, GRAPH_CENTER_Y) なので、
+    // ノード座標をそこに一致させるための移動量は (中心 - ノード座標)。
+    function panGraphViewportToNode(noteId) {
+      const node = graphNodes.find((n) => n.id === noteId);
+      if (!node) {
+        return;
+      }
+      const dx = GRAPH_CENTER_X - node.x;
+      const dy = GRAPH_CENTER_Y - node.y;
+      // setAttribute('transform', ...) はCSSのtransitionが効かないプレゼンテーション属性のため、
+      // インラインスタイルで設定してなめらかな移動(#graph-viewportのtransition)を効かせる。
+      graphViewportGroup.style.transform = `translate(${dx}, ${dy})`;
+    }
+
+    // フォーカスされたノードのラベルだけを最前面(DOM上の末尾)に移動する。
+    // circle自体は動かさない(動かすと<dialog>のフォーカス管理と衝突してフォーカスを失う、
+    // という過去の不具合があったため)。textはpointer-events:noneで非対話的要素なので安全。
+    function bringGraphLabelToFront(noteId) {
+      const label = graphNodesGroup.querySelector(`text[data-note-id="${noteId}"]`);
+      if (label) {
+        graphNodesGroup.appendChild(label);
+      }
     }
 
     function startGraphSimulationLoop() {
@@ -2261,8 +2411,9 @@
         cancelAnimationFrame(graphAnimationFrameId);
         graphAnimationFrameId = null;
       }
-      graphNodes = initializeNodesInCircle(notes, GRAPH_INIT_RADIUS);
+      graphNodes = initializeNodesInCircle(notes, GRAPH_INIT_RADIUS, GRAPH_CENTER_X, GRAPH_CENTER_Y);
       graphIterationCount = 0;
+      graphViewportGroup.style.transform = ''; // リセット時も中央からの表示に戻す
       syncGraphSvgPositions();
       startGraphSimulationLoop();
     }
@@ -2466,6 +2617,42 @@
     });
     graphResetBtn.addEventListener('click', resetGraphLayout);
     graphDialog.addEventListener('keydown', handleGraphDialogKeydown);
+
+    // ラベル表示・リンク強調は、DOM順序やフォーカス中の要素自体を一切動かさず、
+    // 別要素(text・line)のクラスを付け外しするだけにする。フォーカス中の要素を
+    // イベント処理中に再配置すると<dialog>のフォーカス管理と競合して壊れるため
+    // (過去に発生した不具合)、その種の再配置はここでは行わない。
+    graphNodesGroup.addEventListener('focusin', (event) => {
+      const circle = event.target;
+      if (!circle.classList || !circle.classList.contains('graph-node')) {
+        return;
+      }
+      updateGraphLabelVisibility(circle.dataset.noteId);
+      highlightGraphNodeLinks(circle.dataset.noteId, true);
+      panGraphViewportToNode(circle.dataset.noteId);
+      bringGraphLabelToFront(circle.dataset.noteId);
+    });
+    graphNodesGroup.addEventListener('focusout', (event) => {
+      const circle = event.target;
+      if (!circle.classList || !circle.classList.contains('graph-node')) {
+        return;
+      }
+      updateGraphLabelVisibility(circle.dataset.noteId);
+      highlightGraphNodeLinks(circle.dataset.noteId, false);
+    });
+    graphNodesGroup.addEventListener('mouseover', (event) => {
+      const circle = event.target.closest('.graph-node');
+      if (circle) {
+        updateGraphLabelVisibility(circle.dataset.noteId);
+      }
+    });
+    graphNodesGroup.addEventListener('mouseout', (event) => {
+      const circle = event.target.closest('.graph-node');
+      if (circle) {
+        updateGraphLabelVisibility(circle.dataset.noteId);
+      }
+    });
+
     graphDialog.addEventListener('close', () => {
       // モーダルを閉じたらバックグラウンドで計算を回し続けないようにする
       if (graphAnimationFrameId !== null) {
