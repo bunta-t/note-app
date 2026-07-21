@@ -55,7 +55,8 @@
         display: grid;
       }
 
-      #list-heading {
+      #list-heading,
+      #overview-open-btn {
         grid-area: heading;
       }
 
@@ -111,6 +112,15 @@
       background: #fff;
       color: var(--focus-color);
       font-weight: bold;
+    }
+
+    #overview-open-btn {
+      display: block;
+      margin-bottom: 1rem;
+      padding: 0.5rem 1rem;
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      background: #fff;
     }
 
     #note-list {
@@ -456,6 +466,52 @@
       color: var(--danger-color);
     }
 
+    #overview-dialog {
+      max-width: 640px;
+      width: 90vw;
+      max-height: 85vh;
+      overflow-y: auto;
+    }
+
+    #overview-dialog section {
+      margin-top: 1.25rem;
+    }
+
+    #overview-dialog h3 {
+      font-size: 1.1rem;
+      margin: 0 0 0.5rem;
+    }
+
+    #overview-dialog ul {
+      list-style: none;
+      margin: 0.5rem 0 0;
+      padding: 0;
+    }
+
+    #overview-dialog li {
+      margin-bottom: 0.4rem;
+    }
+
+    .hub-note {
+      display: flex;
+      align-items: baseline;
+      gap: 0.5rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .hub-note details {
+      flex: 1;
+    }
+
+    .hub-note summary {
+      cursor: pointer;
+      font-weight: bold;
+    }
+
+    .hub-note ul {
+      margin-left: 1rem;
+    }
+
     @media (prefers-color-scheme: dark) {
       :root {
         --focus-bg: transparent;
@@ -471,6 +527,7 @@
       }
 
       #new-note-btn,
+      #overview-open-btn,
       #back-btn,
       dialog,
       .dialog-actions button,
@@ -517,6 +574,7 @@
   <main>
     <section id="view-list" aria-labelledby="list-heading">
       <h1 id="list-heading">Notes</h1>
+      <button id="overview-open-btn" type="button">ノート俯瞰を表示</button>
 
       <aside aria-labelledby="tags-heading" class="tags-sidebar">
         <h2 id="tags-heading">タグ</h2>
@@ -570,6 +628,37 @@
     </div>
   </dialog>
 
+  <dialog id="overview-dialog" aria-labelledby="overview-dialog-heading">
+    <h2 id="overview-dialog-heading">ノート俯瞰</h2>
+    <button id="overview-close-btn" type="button" autofocus aria-label="閉じる">✕</button>
+
+    <section aria-labelledby="overview-stats-heading">
+      <h3 id="overview-stats-heading">全体統計</h3>
+      <p id="overview-stats-text"></p>
+    </section>
+
+    <section aria-labelledby="overview-recent-heading">
+      <h3 id="overview-recent-heading">最近の作業</h3>
+      <ul id="overview-recent-list"></ul>
+    </section>
+
+    <section aria-labelledby="overview-hubs-heading">
+      <h3 id="overview-hubs-heading">ハブノートとタグクラスタ</h3>
+      <div id="overview-hubs-container"></div>
+    </section>
+
+    <section aria-labelledby="overview-potential-heading">
+      <h3 id="overview-potential-heading">潜在リンク候補</h3>
+      <ul id="overview-potential-list"></ul>
+    </section>
+
+    <section aria-labelledby="overview-isolated-heading">
+      <h3 id="overview-isolated-heading">孤立ノート</h3>
+      <p id="overview-isolated-count"></p>
+      <ul id="overview-isolated-list"></ul>
+    </section>
+  </dialog>
+
   <script type="module">
     // CodeMirror 6 を esm.sh 経由でCDN読み込みする。
     // ?deps=... は、複数の import URL 間で @codemirror/state / @codemirror/view / @codemirror/language の
@@ -615,6 +704,15 @@
     const backlinksListEl = document.getElementById('backlinks-list');
     const tagListEl = document.getElementById('tag-list');
     const clearTagsBtn = document.getElementById('clear-tags-btn');
+    const overviewOpenBtn = document.getElementById('overview-open-btn');
+    const overviewDialog = document.getElementById('overview-dialog');
+    const overviewCloseBtn = document.getElementById('overview-close-btn');
+    const overviewStatsText = document.getElementById('overview-stats-text');
+    const overviewRecentList = document.getElementById('overview-recent-list');
+    const overviewHubsContainer = document.getElementById('overview-hubs-container');
+    const overviewPotentialList = document.getElementById('overview-potential-list');
+    const overviewIsolatedCount = document.getElementById('overview-isolated-count');
+    const overviewIsolatedList = document.getElementById('overview-isolated-list');
 
     // --- 本文エディタ(CodeMirror) -------------------------------------
 
@@ -1327,6 +1425,90 @@
       });
     }
 
+    // --- ノート俯瞰モーダル用の純粋関数 -------------------------------
+
+    function getRecentNotes(notesToSearch, n) {
+      return sortByUpdatedDesc(notesToSearch).slice(0, n); // 既存の sortByUpdatedDesc を再利用
+    }
+
+    // 引用数(getCitationCountと同じ「出現回数」ベースの考え方)の多い順に上位n件。
+    // 比較のたびに引用数を数え直すと無駄が多いため、先に1回だけ集計してから並べ替える。
+    function getHubNotes(notesToSearch, n) {
+      const counted = notesToSearch.map((note) => ({ note, count: getCitationCount(note, notesToSearch) }));
+      counted.sort((a, b) => b.count - a.count);
+      return counted.slice(0, n).map((entry) => entry.note);
+    }
+
+    // 指定タグを持つノートを、指定ノート(ハブノート自身)を除いて更新日順で上位n件。
+    function getNotesWithTagExcept(tagName, allNotes, excludeNoteId, n) {
+      const withTag = allNotes.filter((note) => note.id !== excludeNoteId && extractTags(note.body).includes(tagName));
+      return sortByUpdatedDesc(withTag).slice(0, n);
+    }
+
+    // タグを共有しているがリンクしていない(どちらの方向にも[[]]で参照していない)
+    // ノートのペアを、共有タグ数が多い順に上位n組返す。
+    // タグ集合・リンク先集合はペアごとに数え直すと無駄が多いため先に1回だけ計算する。
+    function getPotentialLinkPairs(allNotes, n) {
+      const tagSets = new Map(allNotes.map((note) => [note.id, new Set(extractTags(note.body))]));
+      const outgoingIdSets = new Map(allNotes.map((note) => [note.id, new Set(getOutgoingNotes(note, allNotes).map((t) => t.id))]));
+      const pairs = [];
+      for (let i = 0; i < allNotes.length; i += 1) {
+        for (let j = i + 1; j < allNotes.length; j += 1) {
+          const a = allNotes[i];
+          const b = allNotes[j];
+          const sharedTags = [...tagSets.get(a.id)].filter((tag) => tagSets.get(b.id).has(tag));
+          if (sharedTags.length === 0) {
+            continue;
+          }
+          const alreadyLinked = outgoingIdSets.get(a.id).has(b.id) || outgoingIdSets.get(b.id).has(a.id);
+          if (alreadyLinked) {
+            continue;
+          }
+          pairs.push({ noteA: a, noteB: b, sharedTags });
+        }
+      }
+      return pairs.sort((x, y) => y.sharedTags.length - x.sharedTags.length).slice(0, n);
+    }
+
+    // 参照されておらず、参照もしていないノート(既存の getOutgoingNotes / getBacklinkNotes を再利用)。
+    function getIsolatedNotes(allNotes) {
+      return allNotes.filter((note) => getOutgoingNotes(note, allNotes).length === 0 && getBacklinkNotes(note, allNotes).length === 0);
+    }
+
+    // 統計セクション用: 全ノートの本文中の [[]] のうち、実在ノートを指しているものの総数。
+    function countValidLinks(allNotes) {
+      let count = 0;
+      allNotes.forEach((note) => {
+        count += extractLinkTitles(note.body).filter((title) => findNoteByTitle(title, allNotes)).length;
+      });
+      return count;
+    }
+
+    // 「2時間前」「昨日」「3日前」のような相対時間表記。1週間以上前は既存の
+    // formatDateTime にフォールバックする。
+    function formatRelativeTime(timestamp) {
+      const diffMs = Date.now() - timestamp;
+      const diffMinutes = Math.floor(diffMs / 60000);
+      const diffHours = Math.floor(diffMs / 3600000);
+      const diffDays = Math.floor(diffMs / 86400000);
+      if (diffMinutes < 1) {
+        return 'たった今';
+      }
+      if (diffMinutes < 60) {
+        return `${diffMinutes}分前`;
+      }
+      if (diffHours < 24) {
+        return `${diffHours}時間前`;
+      }
+      if (diffDays === 1) {
+        return '昨日';
+      }
+      if (diffDays < 7) {
+        return `${diffDays}日前`;
+      }
+      return formatDateTime(timestamp);
+    }
+
     // --- 共通 -----------------------------------------------------
 
     function showView(viewName) {
@@ -1523,6 +1705,180 @@
       announce(`「${deletedNote.title.trim() === '' ? '無題' : deletedNote.title}」を削除しました`);
     }
 
+    // --- ノート俯瞰モーダル ---------------------------------------------
+
+    // 俯瞰モーダル内のノート名ボタンを作る共通ヘルパー。既存の createNoteLinkButton は
+    // 編集画面専用でモーダルを閉じる処理を持たないため、別関数として持つ
+    // (どちらも .note-link クラスを使い見た目は統一する)。
+    function createOverviewNoteButton(note, extraLabel) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'note-link';
+      const titleText = note.title.trim() === '' ? '無題' : note.title;
+      btn.textContent = extraLabel ? `${titleText}${extraLabel}` : titleText;
+      btn.setAttribute('aria-label', `${titleText}を開く`);
+      btn.addEventListener('click', () => {
+        overviewDialog.close();
+        openEditor(note.id);
+      });
+      return btn;
+    }
+
+    function renderOverviewStats() {
+      const linkCount = countValidLinks(notes);
+      const tagCount = getAllTagsWithCounts(notes).length; // 既存関数を再利用
+      overviewStatsText.textContent = `全体: 合計${notes.length}ノート、${linkCount}リンク、${tagCount}タグ`;
+    }
+
+    function renderOverviewRecent() {
+      overviewRecentList.innerHTML = '';
+      getRecentNotes(notes, 3).forEach((note) => {
+        const li = document.createElement('li');
+        li.appendChild(createOverviewNoteButton(note, ` (${formatRelativeTime(note.updatedAt)})`));
+        overviewRecentList.appendChild(li);
+      });
+    }
+
+    // 見出し + ノート一覧(更新日順、最大5件、超えた分は「他N件」)を container に追加する。
+    function appendOverviewNoteCluster(container, headingText, clusterNotes) {
+      const heading = document.createElement('p');
+      heading.textContent = headingText;
+      container.appendChild(heading);
+
+      const ul = document.createElement('ul');
+      sortByUpdatedDesc(clusterNotes).slice(0, 5).forEach((related) => {
+        const li = document.createElement('li');
+        li.appendChild(createOverviewNoteButton(related));
+        ul.appendChild(li);
+      });
+      container.appendChild(ul);
+
+      if (clusterNotes.length > 5) {
+        const more = document.createElement('p');
+        more.textContent = `他${clusterNotes.length - 5}件`;
+        container.appendChild(more);
+      }
+    }
+
+    function renderOverviewHubs() {
+      overviewHubsContainer.innerHTML = '';
+      const hubs = getHubNotes(notes, 3).filter((note) => getCitationCount(note, notes) > 0);
+      if (hubs.length === 0) {
+        const p = document.createElement('p');
+        p.textContent = 'ハブノートはありません';
+        overviewHubsContainer.appendChild(p);
+        return;
+      }
+      hubs.forEach((note) => {
+        const citationCount = getCitationCount(note, notes);
+
+        // <summary> の中に <button> を入れ子にすると、一部のスクリーンリーダーで
+        // ネストした対話的要素の扱いが不安定になるため避ける。ノートを開くボタンと
+        // 折りたたみ用の <details> を横に並べ、CSSで1行に見えるようにする。
+        const row = document.createElement('div');
+        row.className = 'hub-note';
+
+        row.appendChild(createOverviewNoteButton(note));
+
+        const details = document.createElement('details');
+        details.open = false;
+        const summary = document.createElement('summary');
+        summary.textContent = `${citationCount}件から参照`;
+        details.appendChild(summary);
+
+        // ハブノートを参照しているノート(backlinks)だけを対象に、ハブと共有するタグで
+        // クラスタリングして表示する。参照先(そのハブが参照しているノート)は表示しない。
+        const backlinks = getBacklinkNotes(note, notes);
+        if (backlinks.length === 0) {
+          const p = document.createElement('p');
+          p.textContent = '参照元はありません';
+          details.appendChild(p);
+        } else {
+          const hubTags = [...new Set(extractTags(note.body))];
+          const noSharedTag = [];
+          const clustersByTag = new Map();
+          backlinks.forEach((related) => {
+            const relatedTags = new Set(extractTags(related.body));
+            const sharedTags = hubTags.filter((tag) => relatedTags.has(tag));
+            if (sharedTags.length === 0) {
+              noSharedTag.push(related);
+            } else {
+              sharedTags.forEach((tag) => {
+                if (!clustersByTag.has(tag)) {
+                  clustersByTag.set(tag, []);
+                }
+                clustersByTag.get(tag).push(related);
+              });
+            }
+          });
+
+          hubTags.forEach((tag) => {
+            const cluster = clustersByTag.get(tag);
+            if (!cluster) {
+              return;
+            }
+            appendOverviewNoteCluster(details, `タグ「${tag}」を共有する参照元 (${cluster.length}件)`, cluster);
+          });
+          if (noSharedTag.length > 0) {
+            appendOverviewNoteCluster(details, `タグを共有しない参照元 (${noSharedTag.length}件)`, noSharedTag);
+          }
+        }
+
+        row.appendChild(details);
+        overviewHubsContainer.appendChild(row);
+      });
+    }
+
+    function renderOverviewPotentialLinks() {
+      overviewPotentialList.innerHTML = '';
+      const pairs = getPotentialLinkPairs(notes, 3);
+      if (pairs.length === 0) {
+        const li = document.createElement('li');
+        li.textContent = '潜在リンク候補はありません';
+        overviewPotentialList.appendChild(li);
+        return;
+      }
+      pairs.forEach(({ noteA, noteB, sharedTags }) => {
+        const li = document.createElement('li');
+        li.appendChild(createOverviewNoteButton(noteA));
+        li.appendChild(document.createTextNode(' ⇔ '));
+        li.appendChild(createOverviewNoteButton(noteB));
+        const tagsSpan = document.createElement('span');
+        tagsSpan.textContent = ` (共通タグ: ${sharedTags.join('、')})`;
+        li.appendChild(tagsSpan);
+        overviewPotentialList.appendChild(li);
+      });
+    }
+
+    function renderOverviewIsolated() {
+      const isolated = getIsolatedNotes(notes);
+      overviewIsolatedList.innerHTML = '';
+      if (isolated.length === 0) {
+        overviewIsolatedCount.textContent = '孤立ノートはありません';
+        return;
+      }
+      overviewIsolatedCount.textContent = `孤立ノート: ${isolated.length}件`;
+      sortByUpdatedDesc(isolated).slice(0, 5).forEach((note) => {
+        const li = document.createElement('li');
+        li.appendChild(createOverviewNoteButton(note));
+        overviewIsolatedList.appendChild(li);
+      });
+    }
+
+    function renderOverviewModal() {
+      renderOverviewStats();
+      renderOverviewRecent();
+      renderOverviewHubs();
+      renderOverviewPotentialLinks();
+      renderOverviewIsolated();
+    }
+
+    function openOverviewModal() {
+      renderOverviewModal();
+      overviewDialog.showModal();
+      announce('ノート俯瞰を表示しました');
+    }
+
     // --- 編集画面 ---------------------------------------------------
 
     function createNoteLinkButton(note) {
@@ -1676,8 +2032,13 @@
       deleteTargetId = null;
     });
 
+    overviewOpenBtn.addEventListener('click', openOverviewModal);
+    overviewCloseBtn.addEventListener('click', () => {
+      overviewDialog.close();
+    });
+
     document.addEventListener('keydown', (event) => {
-      if (deleteDialog.open) {
+      if (deleteDialog.open || overviewDialog.open) {
         // ダイアログ表示中は <dialog> 標準のフォーカストラップ・Escape挙動に任せる
         return;
       }
@@ -1693,6 +2054,10 @@
           event.preventDefault();
           handleExplicitSave();
         }
+      } else if (event.key === '?' && !listView.hidden && editorView.hidden) {
+        // Shift+/ (多くのキーボード配列では "?" として送られる) で俯瞰モーダルを開く
+        event.preventDefault();
+        openOverviewModal();
       }
     });
 
