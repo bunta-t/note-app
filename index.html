@@ -15,6 +15,7 @@
       --tag-color: #166534;
       --code-bg: #eee;
       --external-link-color: #0e7490;
+      --background-color: #ffffff;
     }
 
     * {
@@ -533,6 +534,11 @@
       fill: currentColor;
       pointer-events: none;
       text-anchor: middle;
+      /* ラベル同士が重なっても文字が読めるよう、背景色の縁取りを先に描く */
+      paint-order: stroke fill;
+      stroke: var(--background-color);
+      stroke-width: 4px;
+      stroke-linejoin: round;
     }
 
     .graph-node {
@@ -555,6 +561,7 @@
         --tag-color: #86efac;
         --code-bg: #2a2a2a;
         --external-link-color: #67e8f9;
+        --background-color: #1c1c1c;
       }
 
       body {
@@ -2120,10 +2127,10 @@
     // --- ノードグラフモーダル -----------------------------------------
 
     const GRAPH_PARAMS = {
-      kRepel: 5000, // 反発力定数
+      kRepel: 8000, // 反発力定数
       kLink: 0.03, // [[]]リンクによるバネ定数
       kTag: 0.02, // タグ共有(Jaccard係数)によるバネ定数
-      restLength: 100, // バネの自然長 L0
+      restLength: 160, // バネの自然長 L0
       kCenter: 0.01, // 中心引力定数
       damping: 0.85, // 減衰係数(毎ステップ速度に乗算)
       mass: 1,
