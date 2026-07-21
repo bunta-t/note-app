@@ -114,7 +114,8 @@
       font-weight: bold;
     }
 
-    #overview-open-btn {
+    #overview-open-btn,
+    #graph-open-btn {
       display: block;
       margin-bottom: 1rem;
       padding: 0.5rem 1rem;
@@ -512,6 +513,41 @@
       margin-left: 1rem;
     }
 
+    #graph-dialog {
+      max-width: 880px;
+      width: 90vw;
+      max-height: 90vh;
+      overflow: auto;
+    }
+
+    #graph-dialog svg {
+      display: block;
+      margin: 1rem auto 0;
+      max-width: 100%;
+      height: auto;
+    }
+
+    /* ラベルはクリック/フォーカスを奪わないようにする(円だけを対話的要素にする) */
+    #graph-dialog text {
+      font-size: 18px;
+      fill: currentColor;
+      pointer-events: none;
+      text-anchor: middle;
+    }
+
+    .graph-node {
+      fill: var(--focus-color);
+      stroke: var(--border-color);
+      stroke-width: 1;
+      cursor: pointer;
+    }
+
+    .graph-edge {
+      stroke: var(--border-color);
+      stroke-width: 1.5;
+      stroke-opacity: 0.6;
+    }
+
     @media (prefers-color-scheme: dark) {
       :root {
         --focus-bg: transparent;
@@ -528,6 +564,7 @@
 
       #new-note-btn,
       #overview-open-btn,
+      #graph-open-btn,
       #back-btn,
       dialog,
       .dialog-actions button,
@@ -631,6 +668,7 @@
   <dialog id="overview-dialog" aria-labelledby="overview-dialog-heading">
     <h2 id="overview-dialog-heading">ノート俯瞰</h2>
     <button id="overview-close-btn" type="button" autofocus aria-label="閉じる">✕</button>
+    <button id="graph-open-btn" type="button">ノードグラフを表示</button>
 
     <section aria-labelledby="overview-stats-heading">
       <h3 id="overview-stats-heading">全体統計</h3>
@@ -657,6 +695,20 @@
       <p id="overview-isolated-count"></p>
       <ul id="overview-isolated-list"></ul>
     </section>
+  </dialog>
+
+  <dialog id="graph-dialog" aria-labelledby="graph-dialog-heading">
+    <h2 id="graph-dialog-heading">ノードグラフ</h2>
+    <div class="dialog-actions">
+      <button id="graph-close-btn" type="button" autofocus aria-label="閉じる">✕</button>
+      <button id="graph-reset-btn" type="button" aria-label="ノード配置をリセット">配置をリセット</button>
+    </div>
+    <p id="graph-status" class="visually-hidden" aria-live="polite"></p>
+    <svg id="graph-svg" viewBox="-400 -300 800 600" width="800" height="600"
+         role="img" aria-label="ノートの関係を示すノードグラフ">
+      <g id="graph-edges"></g>
+      <g id="graph-nodes"></g>
+    </svg>
   </dialog>
 
   <script type="module">
@@ -713,6 +765,13 @@
     const overviewPotentialList = document.getElementById('overview-potential-list');
     const overviewIsolatedCount = document.getElementById('overview-isolated-count');
     const overviewIsolatedList = document.getElementById('overview-isolated-list');
+    const graphOpenBtn = document.getElementById('graph-open-btn');
+    const graphDialog = document.getElementById('graph-dialog');
+    const graphCloseBtn = document.getElementById('graph-close-btn');
+    const graphResetBtn = document.getElementById('graph-reset-btn');
+    const graphStatus = document.getElementById('graph-status');
+    const graphEdgesGroup = document.getElementById('graph-edges');
+    const graphNodesGroup = document.getElementById('graph-nodes');
 
     // --- 本文エディタ(CodeMirror) -------------------------------------
 
@@ -1509,6 +1568,185 @@
       return formatDateTime(timestamp);
     }
 
+    // --- ノードグラフモーダル用の純粋関数 ---------------------------
+
+    // Jaccard係数 = 共通タグ数 / 全体タグ数(和集合)。単純な共通タグ数ではなく比率を使うのは、
+    // タグを大量に持つノート同士がそれだけで強く引き合ってしまう偏りを防ぐため。
+    function calculateJaccard(tagsA, tagsB) {
+      const setA = new Set(tagsA);
+      const setB = new Set(tagsB);
+      if (setA.size === 0 || setB.size === 0) {
+        return 0;
+      }
+      const intersectionSize = [...setA].filter((tag) => setB.has(tag)).length;
+      const unionSize = new Set([...setA, ...setB]).size;
+      return intersectionSize / unionSize;
+    }
+
+    // [[]] リンクがある「ノートの組」を辺として1本にまとめる。
+    // A→B と B→A が両方あっても辺は1本(引力の二重計上を避ける、既存の getOutgoingNotes を再利用)。
+    function buildGraphEdges(notesList) {
+      const seenKeys = new Set();
+      const edges = [];
+      notesList.forEach((note) => {
+        getOutgoingNotes(note, notesList).forEach((target) => {
+          const key = [note.id, target.id].sort().join('|');
+          if (!seenKeys.has(key)) {
+            seenKeys.add(key);
+            edges.push({ sourceId: note.id, targetId: target.id });
+          }
+        });
+      });
+      return edges;
+    }
+
+    // ノート間のJaccard係数を1度だけ計算しておく(シミュレーション中はタグが変化しないため、
+    // 毎ステップ計算し直す必要が無い)。simulateStep の tagSimilarity 引数として渡す。
+    function buildTagSimilarityMap(notesList) {
+      const map = new Map();
+      notesList.forEach((noteA) => {
+        const tagsA = extractTags(noteA.body);
+        const row = new Map();
+        notesList.forEach((noteB) => {
+          if (noteA.id === noteB.id) {
+            return;
+          }
+          row.set(noteB.id, calculateJaccard(tagsA, extractTags(noteB.body)));
+        });
+        map.set(noteA.id, row);
+      });
+      return map;
+    }
+
+    // ノードを円周上に等間隔配置する。初期配置を毎回ランダムにすると動作確認がしづらいため、
+    // 決定的な配置にする(モーダルを開くたび・Rキーでリセットするたび同じ初期状態になる)。
+    function initializeNodesInCircle(notesList, radius) {
+      const n = notesList.length;
+      return notesList.map((note, i) => {
+        const angle = (2 * Math.PI * i) / n;
+        return {
+          id: note.id,
+          note,
+          x: radius * Math.cos(angle),
+          y: radius * Math.sin(angle),
+          vx: 0,
+          vy: 0,
+        };
+      });
+    }
+
+    // 力学モデルを1ステップ進める。エネルギー E_total = E_repel + E_attract + E_center の
+    // 勾配(=力)を計算し、Symplectic Euler(速度→位置の順に更新)で積分する。
+    // 通常のEuler法(位置→速度の順)より、バネのように振動する系で発散しにくいため採用している。
+    function simulateStep(nodes, edges, tagSimilarity, params) {
+      const { kRepel, kLink, kTag, restLength, kCenter, damping, mass, dt, maxSpeed } = params;
+      const forces = new Map(nodes.map((n) => [n.id, { fx: 0, fy: 0 }]));
+
+      // 反発力(全ノードペア、クーロン反発型): F = kRepel / d^2、方向は (xi - xj) の正規化
+      for (let i = 0; i < nodes.length; i += 1) {
+        for (let j = i + 1; j < nodes.length; j += 1) {
+          const a = nodes[i];
+          const b = nodes[j];
+          const dx = a.x - b.x;
+          const dy = a.y - b.y;
+          const dist = Math.max(Math.sqrt(dx * dx + dy * dy), 1); // 重なり時の0除算・急発散を防ぐ下限
+          const force = kRepel / (dist * dist);
+          const fx = (dx / dist) * force;
+          const fy = (dy / dist) * force;
+          forces.get(a.id).fx += fx;
+          forces.get(a.id).fy += fy;
+          forces.get(b.id).fx -= fx;
+          forces.get(b.id).fy -= fy;
+        }
+      }
+
+      // 引力(統一バネ表現): リンクの有無(A_ij)とタグのJaccard係数(s_ij)を、
+      // 「同じバネ」として1つの式にまとめる。物理的には別物でも、モデル上は
+      // 「関係が強いほど強く引き合うバネ」という同じ性質として扱えるため統一している。
+      const edgeKeySet = new Set(edges.map((e) => [e.sourceId, e.targetId].sort().join('|')));
+      for (let i = 0; i < nodes.length; i += 1) {
+        for (let j = i + 1; j < nodes.length; j += 1) {
+          const a = nodes[i];
+          const b = nodes[j];
+          const hasLink = edgeKeySet.has([a.id, b.id].sort().join('|')) ? 1 : 0;
+          const similarity = tagSimilarity.get(a.id)?.get(b.id) ?? 0;
+          if (hasLink === 0 && similarity === 0) {
+            continue; // 無関係なペアは計算を省略
+          }
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const dist = Math.max(Math.sqrt(dx * dx + dy * dy), 1);
+          const springConstant = kLink * hasLink + kTag * similarity;
+          const force = springConstant * (dist - restLength);
+          const fx = (dx / dist) * force;
+          const fy = (dy / dist) * force;
+          forces.get(a.id).fx += fx;
+          forces.get(a.id).fy += fy;
+          forces.get(b.id).fx -= fx;
+          forces.get(b.id).fy -= fy;
+        }
+      }
+
+      // 中心引力: 画面中央(原点)から遠いノードを弱く引き戻し、画面外への発散を防ぐ
+      nodes.forEach((node) => {
+        forces.get(node.id).fx += -kCenter * node.x;
+        forces.get(node.id).fy += -kCenter * node.y;
+      });
+
+      // 運動方程式 m*dv/dt = F - c*v を Symplectic Euler で積分:
+      // 先に速度を更新してから、その新しい速度で位置を更新する。
+      let totalSpeed = 0;
+      nodes.forEach((node) => {
+        const f = forces.get(node.id);
+        let vx = (node.vx + (f.fx / mass) * dt) * damping; // ダンピングは毎ステップ速度に乗算
+        let vy = (node.vy + (f.fy / mass) * dt) * damping;
+        const speed = Math.sqrt(vx * vx + vy * vy);
+        if (speed > maxSpeed) {
+          vx = (vx / speed) * maxSpeed; // 発散防止のための速度クリップ
+          vy = (vy / speed) * maxSpeed;
+        }
+        node.vx = vx;
+        node.vy = vy;
+        node.x += vx * dt;
+        node.y += vy * dt;
+        totalSpeed += Math.sqrt(vx * vx + vy * vy);
+      });
+
+      return totalSpeed; // 収束判定 (Σ|v_i| < 閾値) に使う
+    }
+
+    // 現在ノードから見て指定方向(±45°の扇形)にある最も近いノードを探す(矢印キー用)。
+    // direction は 'up' | 'down' | 'left' | 'right'。SVG座標系(yが下向きに正)に合わせて
+    // 角度を定義する: right=[-45,45]、down=[45,135]、up=[-135,-45]、left=[135,180]∪[-180,-135]。
+    function findNearestNodeInDirection(currentNode, otherNodes, direction) {
+      let nearest = null;
+      let nearestDist = Infinity;
+      otherNodes.forEach((other) => {
+        if (other.id === currentNode.id) {
+          return;
+        }
+        const dx = other.x - currentNode.x;
+        const dy = other.y - currentNode.y;
+        const angle = (Math.atan2(dy, dx) * 180) / Math.PI;
+        if (!isAngleInDirection(angle, direction)) {
+          return;
+        }
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < nearestDist) {
+          nearestDist = dist;
+          nearest = other;
+        }
+      });
+      return nearest; // 該当ノードが無ければ null(呼び出し側で無反応にする)
+    }
+
+    function isAngleInDirection(angleDeg, direction) {
+      if (direction === 'right') return angleDeg >= -45 && angleDeg <= 45;
+      if (direction === 'down') return angleDeg >= 45 && angleDeg <= 135;
+      if (direction === 'up') return angleDeg >= -135 && angleDeg <= -45;
+      return angleDeg >= 135 || angleDeg <= -135; // left: 180°をまたぐため2区間
+    }
+
     // --- 共通 -----------------------------------------------------
 
     function showView(viewName) {
@@ -1879,6 +2117,181 @@
       announce('ノート俯瞰を表示しました');
     }
 
+    // --- ノードグラフモーダル -----------------------------------------
+
+    const GRAPH_PARAMS = {
+      kRepel: 5000, // 反発力定数
+      kLink: 0.03, // [[]]リンクによるバネ定数
+      kTag: 0.02, // タグ共有(Jaccard係数)によるバネ定数
+      restLength: 100, // バネの自然長 L0
+      kCenter: 0.01, // 中心引力定数
+      damping: 0.85, // 減衰係数(毎ステップ速度に乗算)
+      mass: 1,
+      dt: 0.1,
+      maxSpeed: 20, // 発散防止のための速度上限(px/step)
+    };
+    const GRAPH_MAX_ITERATIONS = 500;
+    const GRAPH_CONVERGENCE_THRESHOLD = 0.1; // Σ|v_i| がこれを下回ったら収束とみなす
+    const GRAPH_SUBSTEPS_PER_FRAME = 8; // 毎フレーム5〜10回反復する、という仕様に合わせた値
+    const GRAPH_INIT_RADIUS = 180; // 初期円周配置の半径
+    const ARROW_KEY_DIRECTIONS = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' };
+    const SVG_NS = 'http://www.w3.org/2000/svg'; // SVG要素は document.createElement ではなく createElementNS で作る
+
+    let graphNodes = [];
+    let graphEdges = [];
+    let graphTagSimilarity = new Map();
+    let graphAnimationFrameId = null;
+    let graphIterationCount = 0;
+
+    function openGraphModal() {
+      setupGraphSimulation();
+      graphDialog.showModal();
+      startGraphSimulationLoop();
+    }
+
+    function setupGraphSimulation() {
+      graphNodes = initializeNodesInCircle(notes, GRAPH_INIT_RADIUS);
+      graphEdges = buildGraphEdges(notes);
+      graphTagSimilarity = buildTagSimilarityMap(notes);
+      graphIterationCount = 0;
+      renderGraphSvgElements();
+    }
+
+    function renderGraphSvgElements() {
+      graphEdgesGroup.innerHTML = '';
+      graphNodesGroup.innerHTML = '';
+
+      graphEdges.forEach((edge) => {
+        const line = document.createElementNS(SVG_NS, 'line');
+        line.setAttribute('class', 'graph-edge');
+        line.dataset.sourceId = edge.sourceId;
+        line.dataset.targetId = edge.targetId;
+        graphEdgesGroup.appendChild(line);
+      });
+
+      // Tab順が「引用数の多い順」になる仕様のため、この並び順のままDOMに追加する
+      // (ブラウザの既定のTab順はDOM順であることを利用している)。
+      const nodesByCitationDesc = [...notes].sort(
+        (a, b) => getCitationCount(b, notes) - getCitationCount(a, notes)
+      );
+      nodesByCitationDesc.forEach((note) => {
+        const citationCount = getCitationCount(note, notes);
+        const radius = 20 + 5 * Math.min(citationCount, 5);
+        const titleText = note.title.trim() === '' ? '無題' : note.title;
+
+        const circle = document.createElementNS(SVG_NS, 'circle');
+        circle.setAttribute('id', `graph-node-${note.id}`);
+        circle.setAttribute('class', 'graph-node');
+        circle.setAttribute('r', String(radius));
+        // 引用数0で薄く、5件以上で最も濃くなるよう不透明度だけを変える(色は増やさない)
+        circle.setAttribute('fill-opacity', String(0.25 + 0.75 * (Math.min(citationCount, 5) / 5)));
+        circle.setAttribute('tabindex', '0');
+        circle.setAttribute('role', 'button');
+        circle.setAttribute('aria-label', `${titleText}、${citationCount}件から参照`);
+        circle.dataset.noteId = note.id;
+        circle.addEventListener('click', () => openGraphNode(note.id));
+        graphNodesGroup.appendChild(circle);
+
+        const text = document.createElementNS(SVG_NS, 'text');
+        text.dataset.noteId = note.id;
+        text.textContent = titleText;
+        graphNodesGroup.appendChild(text);
+      });
+    }
+
+    function openGraphNode(noteId) {
+      graphDialog.close();
+      openEditor(noteId);
+    }
+
+    // simulateStep が更新した x, y をSVG要素の cx/cy・x1/y1/x2/y2 に反映する。
+    // シミュレーション自体は毎フレームDOMに触れず、このタイミングでまとめて反映する。
+    function syncGraphSvgPositions() {
+      graphNodes.forEach((node) => {
+        const circle = document.getElementById(`graph-node-${node.id}`);
+        circle.setAttribute('cx', String(node.x));
+        circle.setAttribute('cy', String(node.y));
+        const text = graphNodesGroup.querySelector(`text[data-note-id="${node.id}"]`);
+        text.setAttribute('x', String(node.x));
+        text.setAttribute('y', String(node.y + Number(circle.getAttribute('r')) + 16));
+      });
+      graphEdgesGroup.querySelectorAll('line').forEach((line) => {
+        const source = graphNodes.find((n) => n.id === line.dataset.sourceId);
+        const target = graphNodes.find((n) => n.id === line.dataset.targetId);
+        line.setAttribute('x1', String(source.x));
+        line.setAttribute('y1', String(source.y));
+        line.setAttribute('x2', String(target.x));
+        line.setAttribute('y2', String(target.y));
+      });
+    }
+
+    function startGraphSimulationLoop() {
+      announce('レイアウトを計算中');
+      graphStatus.textContent = 'レイアウトを計算中';
+      stepGraphSimulationFrame();
+    }
+
+    function stepGraphSimulationFrame() {
+      let totalSpeed = 0;
+      for (let i = 0; i < GRAPH_SUBSTEPS_PER_FRAME && graphIterationCount < GRAPH_MAX_ITERATIONS; i += 1) {
+        totalSpeed = simulateStep(graphNodes, graphEdges, graphTagSimilarity, GRAPH_PARAMS);
+        graphIterationCount += 1;
+      }
+      syncGraphSvgPositions();
+
+      const converged = totalSpeed < GRAPH_CONVERGENCE_THRESHOLD || graphIterationCount >= GRAPH_MAX_ITERATIONS;
+      if (converged) {
+        graphAnimationFrameId = null;
+        announce('レイアウトが確定しました');
+        graphStatus.textContent = 'レイアウトが確定しました';
+        return;
+      }
+      graphAnimationFrameId = requestAnimationFrame(stepGraphSimulationFrame);
+    }
+
+    function resetGraphLayout() {
+      if (graphAnimationFrameId !== null) {
+        cancelAnimationFrame(graphAnimationFrameId);
+        graphAnimationFrameId = null;
+      }
+      graphNodes = initializeNodesInCircle(notes, GRAPH_INIT_RADIUS);
+      graphIterationCount = 0;
+      syncGraphSvgPositions();
+      startGraphSimulationLoop();
+    }
+
+    // 矢印キー・Rキー・ノード上のEnterは、グラフモーダルが開いている間だけ意味を持つため、
+    // グローバルなkeydownリスナーではなく graphDialog 要素専用のリスナーで完結させる。
+    function handleGraphDialogKeydown(event) {
+      if (event.key.toLowerCase() === 'r') {
+        // Rキーはモーダル内のどこにフォーカスがあっても効く
+        event.preventDefault();
+        resetGraphLayout();
+        return;
+      }
+
+      const focused = document.activeElement;
+      const isNodeFocused = focused != null && focused.classList.contains('graph-node');
+
+      if (event.key === 'Enter' && isNodeFocused) {
+        openGraphNode(focused.dataset.noteId);
+        return;
+      }
+
+      const direction = ARROW_KEY_DIRECTIONS[event.key];
+      if (!direction || !isNodeFocused) {
+        // ノード以外にフォーカスがある間、矢印キーは既定のフォーカス移動に任せる
+        return;
+      }
+      const currentNode = graphNodes.find((n) => n.id === focused.dataset.noteId);
+      const nearest = findNearestNodeInDirection(currentNode, graphNodes, direction);
+      if (!nearest) {
+        return; // 該当ノードが無ければ無反応
+      }
+      event.preventDefault();
+      document.getElementById(`graph-node-${nearest.id}`).focus();
+    }
+
     // --- 編集画面 ---------------------------------------------------
 
     function createNoteLinkButton(note) {
@@ -2037,8 +2450,25 @@
       overviewDialog.close();
     });
 
+    graphOpenBtn.addEventListener('click', () => {
+      overviewDialog.close();
+      openGraphModal();
+    });
+    graphCloseBtn.addEventListener('click', () => {
+      graphDialog.close();
+    });
+    graphResetBtn.addEventListener('click', resetGraphLayout);
+    graphDialog.addEventListener('keydown', handleGraphDialogKeydown);
+    graphDialog.addEventListener('close', () => {
+      // モーダルを閉じたらバックグラウンドで計算を回し続けないようにする
+      if (graphAnimationFrameId !== null) {
+        cancelAnimationFrame(graphAnimationFrameId);
+        graphAnimationFrameId = null;
+      }
+    });
+
     document.addEventListener('keydown', (event) => {
-      if (deleteDialog.open || overviewDialog.open) {
+      if (deleteDialog.open || overviewDialog.open || graphDialog.open) {
         // ダイアログ表示中は <dialog> 標準のフォーカストラップ・Escape挙動に任せる
         return;
       }
