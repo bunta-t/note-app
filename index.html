@@ -1889,23 +1889,84 @@
       return map;
     }
 
-    // ノードを円周上に等間隔配置する。初期配置を毎回ランダムにすると動作確認がしづらいため、
-    // 決定的な配置にする(モーダルを開くたび・Rキーでリセットするたび同じ初期状態になる)。
     function initializeNodesInCircle(notesList, radius, centerX, centerY) {
-      const n = notesList.length;
-      return notesList.map((note, i) => {
-        const angle = (2 * Math.PI * i) / n;
-        return {
-          id: note.id,
-          note,
-          x: centerX + radius * Math.cos(angle),
-          y: centerY + radius * Math.sin(angle),
-          vx: 0,
-          vy: 0,
-        };
+      // タグの出現頻度を集計(頻度が高いタグほど、それを持つノードは「中心性が高い」とみなす)
+      const tagCounts = new Map();
+      notesList.forEach((note) => {
+        new Set(extractTags(note.body)).forEach((tag) => {
+          tagCounts.set(tag, (tagCounts.get(tag) || 0) + 1);
+        });
+      });
+      const sortedTags = [...tagCounts.keys()].sort((a, b) => tagCounts.get(b) - tagCounts.get(a));
+
+      function getPrimaryTag(note) {
+        const noteTags = new Set(extractTags(note.body));
+        return sortedTags.find((tag) => noteTags.has(tag)) ?? null;
+      }
+
+      // 各ノートの「タグ中心性」= 持っているタグの頻度の合計(共通タグが多いタグを持つほど大きい)
+      function getTagCentrality(note) {
+        const noteTags = extractTags(note.body);
+        return noteTags.reduce((sum, tag) => sum + (tagCounts.get(tag) || 0), 0);
+      }
+
+      const citationCounts = notesList.map((note) => getCitationCount(note, notesList));
+      const maxCitation = Math.max(...citationCounts, 1);
+      const tagCentralities = notesList.map((note) => getTagCentrality(note));
+      const maxTagCentrality = Math.max(...tagCentralities, 1);
+
+      // 半径を「引用数」と「タグ中心性」の両方から決める
+      const wCitation = 0.4;
+      const wTagCentrality = 0.4;
+      const minRadiusRatio = 0.3; // どんなに中心的でも、最低これくらいの半径は保つ(完全な重なりを避ける)
+
+      const radii = notesList.map((note, i) => {
+        const normCitation = citationCounts[i] / maxCitation;
+        const normTagCentrality = tagCentralities[i] / maxTagCentrality;
+        const factor = 1 - wCitation * normCitation - wTagCentrality * normTagCentrality;
+        return radius * Math.max(minRadiusRatio, factor);
+      });
+
+      // タグでグルーピングして角度セクションを決める(これは前回と同じ考え方)
+      const groups = new Map();
+      const noTagGroup = [];
+      notesList.forEach((note) => {
+        const tag = getPrimaryTag(note);
+        if (tag === null) {
+          noTagGroup.push(note);
+          return;
+        }
+        if (!groups.has(tag)) groups.set(tag, []);
+        groups.get(tag).push(note);
+      });
+
+      const groupKeys = [...groups.keys()];
+      if (noTagGroup.length > 0) groupKeys.push(null);
+      const groupCount = groupKeys.length || 1;
+      const sectorAngle = (2 * Math.PI) / groupCount;
+
+      const positions = new Map();
+      groupKeys.forEach((key, groupIndex) => {
+        const groupNotes = key === null ? noTagGroup : groups.get(key);
+        const sectorStart = groupIndex * sectorAngle;
+        const n = groupNotes.length;
+        groupNotes.forEach((note, i) => {
+          const localAngle = n > 1 ? (sectorAngle * 0.8 * i) / (n - 1) : sectorAngle * 0.4;
+          const angle = sectorStart + sectorAngle * 0.1 + localAngle;
+          const noteIndex = notesList.indexOf(note);
+          const r = radii[noteIndex];
+          positions.set(note.id, {
+            x: centerX + r * Math.cos(angle),
+            y: centerY + r * Math.sin(angle),
+          });
+        });
+      });
+
+      return notesList.map((note) => {
+        const pos = positions.get(note.id);
+        return { id: note.id, note, x: pos.x, y: pos.y, vx: 0, vy: 0 };
       });
     }
-
     // 力学モデルを1ステップ進める。エネルギー E_total = E_repel + E_attract + E_center の
     // 勾配(=力)を計算し、Symplectic Euler(速度→位置の順に更新)で積分する。
     // 通常のEuler法(位置→速度の順)より、バネのように振動する系で発散しにくいため採用している。
@@ -1967,7 +2028,7 @@
       // 運動方程式 m*dv/dt = F - c*v を Symplectic Euler で積分:
       // 先に速度を更新してから、その新しい速度で位置を更新する。
       let totalSpeed = 0;
-      nodes.forEach((node) => {
+            nodes.forEach((node) => {
         const f = forces.get(node.id);
         let vx = (node.vx + (f.fx / mass) * dt) * damping; // ダンピングは毎ステップ速度に乗算
         let vy = (node.vy + (f.fy / mass) * dt) * damping;
@@ -2412,11 +2473,11 @@
     const GRAPH_CENTER_Y = 750;
 
     const GRAPH_PARAMS = {
-      kRepel: 11000, // 反発力定数 10000
+      kRepel: 10000, // 反発力定数 10000
       kLink: 0.03, // [[]]リンクによるバネ定数 0.03
       kTag: 0.04, // タグ共有(Jaccard係数)によるバネ定数 0.02
       restLength: 200, // バネの自然長 L0
-      kCenter: 0.012, // 中心引力定数(ノードがビューポート外にはみ出さないよう強めにしてある) 0.01
+      kCenter: 0.01, // 中心引力定数(ノードがビューポート外にはみ出さないよう強めにしてある) 0.01
       centerX: GRAPH_CENTER_X, // 中心引力の目標点(キャンバス中央)
       centerY: GRAPH_CENTER_Y,
       damping: 0.85, // 減衰係数(毎ステップ速度に乗算)
