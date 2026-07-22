@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ja">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -643,45 +643,45 @@
   <main>
     <section id="view-list" aria-labelledby="list-heading">
       <h1 id="list-heading">Notes</h1>
-      <button id="overview-open-btn" type="button">ノート俯瞰を表示</button>
+      <button id="overview-open-btn" type="button">Show Overview</button>
 
       <aside aria-labelledby="tags-heading" class="tags-sidebar">
-        <h2 id="tags-heading">タグ</h2>
-        <button id="clear-tags-btn" type="button">全て表示</button>
+        <h2 id="tags-heading">Tags</h2>
+        <button id="clear-tags-btn" type="button">Show All</button>
         <ul id="tag-list"></ul>
       </aside>
 
       <div class="note-list-area">
-        <button id="new-note-btn" type="button">新規ノート</button>
+        <button id="new-note-btn" type="button">New Note</button>
         <ul id="note-list"></ul>
       </div>
     </section>
 
     <section id="view-editor" aria-labelledby="editor-heading" hidden>
-      <button id="back-btn" type="button">一覧に戻る</button>
-      <h1 id="editor-heading">ノート編集</h1>
+      <button id="back-btn" type="button">Back to List</button>
+      <h1 id="editor-heading">Edit Note</h1>
 
       <aside class="editor-sidebar" aria-hidden="true"></aside>
 
       <div class="field" id="title-field">
-        <label for="title-input">タイトル</label>
+        <label for="title-input">Title</label>
         <input id="title-input" type="text">
       </div>
 
       <div class="field" id="body-field">
-        <label id="body-label">本文</label>
+        <label id="body-label">Body</label>
         <div id="body-editor"></div>
       </div>
 
       <section aria-labelledby="related-heading" class="related-section">
-        <h2 id="related-heading">関連ノート</h2>
-        <p id="related-empty-message" hidden>関連ノートはありません</p>
+        <h2 id="related-heading">Related Notes</h2>
+        <p id="related-empty-message" hidden>No related notes</p>
         <details id="outgoing-details" open>
-          <summary>参照しているノート</summary>
+          <summary>Notes This References</summary>
           <ul id="outgoing-list"></ul>
         </details>
         <details id="backlinks-details" open>
-          <summary>参照されているノート(backlinks)</summary>
+          <summary>Referenced By</summary>
           <ul id="backlinks-list"></ul>
         </details>
       </section>
@@ -689,55 +689,55 @@
   </main>
 
   <dialog id="delete-dialog" aria-labelledby="delete-dialog-heading">
-    <h2 id="delete-dialog-heading">ノートを削除しますか?</h2>
+    <h2 id="delete-dialog-heading">Delete this note?</h2>
     <p id="delete-dialog-message"></p>
     <div class="dialog-actions">
-      <button id="delete-cancel-btn" type="button" autofocus>キャンセル</button>
-      <button id="delete-confirm-btn" type="button">削除する</button>
+      <button id="delete-cancel-btn" type="button" autofocus>Cancel</button>
+      <button id="delete-confirm-btn" type="button">Delete</button>
     </div>
   </dialog>
 
   <dialog id="overview-dialog" aria-labelledby="overview-dialog-heading">
-    <h2 id="overview-dialog-heading">ノート俯瞰</h2>
-    <button id="overview-close-btn" type="button" autofocus aria-label="閉じる">✕</button>
-    <button id="graph-open-btn" type="button">ノードグラフを表示</button>
+    <h2 id="overview-dialog-heading">Note Overview</h2>
+    <button id="overview-close-btn" type="button" autofocus aria-label="Close">✕</button>
+    <button id="graph-open-btn" type="button">Show Node Graph</button>
 
     <section aria-labelledby="overview-stats-heading">
-      <h3 id="overview-stats-heading">全体統計</h3>
+      <h3 id="overview-stats-heading">Statistics</h3>
       <p id="overview-stats-text"></p>
     </section>
 
     <section aria-labelledby="overview-recent-heading">
-      <h3 id="overview-recent-heading">最近の作業</h3>
+      <h3 id="overview-recent-heading">Recent Activity</h3>
       <ul id="overview-recent-list"></ul>
     </section>
 
     <section aria-labelledby="overview-hubs-heading">
-      <h3 id="overview-hubs-heading">ハブノートとタグクラスタ</h3>
+      <h3 id="overview-hubs-heading">Hub Notes &amp; Tag Clusters</h3>
       <div id="overview-hubs-container"></div>
     </section>
 
     <section aria-labelledby="overview-potential-heading">
-      <h3 id="overview-potential-heading">潜在リンク候補</h3>
+      <h3 id="overview-potential-heading">Potential Link Candidates</h3>
       <ul id="overview-potential-list"></ul>
     </section>
 
     <section aria-labelledby="overview-isolated-heading">
-      <h3 id="overview-isolated-heading">孤立ノート</h3>
+      <h3 id="overview-isolated-heading">Isolated Notes</h3>
       <p id="overview-isolated-count"></p>
       <ul id="overview-isolated-list"></ul>
     </section>
   </dialog>
 
   <dialog id="graph-dialog" aria-labelledby="graph-dialog-heading">
-    <h2 id="graph-dialog-heading">ノードグラフ</h2>
+    <h2 id="graph-dialog-heading">Node Graph</h2>
     <div class="dialog-actions">
-      <button id="graph-close-btn" type="button" autofocus aria-label="閉じる">✕</button>
-      <button id="graph-reset-btn" type="button" aria-label="ノード配置をリセット">配置をリセット</button>
+      <button id="graph-close-btn" type="button" autofocus aria-label="Close">✕</button>
+      <button id="graph-reset-btn" type="button" aria-label="Reset node layout">Reset Layout</button>
     </div>
     <p id="graph-status" class="visually-hidden" aria-live="polite"></p>
     <svg id="graph-svg" viewBox="500 350 1000 800" width="1000" height="800"
-         role="img" aria-label="ノートの関係を示すノードグラフ">
+         role="img" aria-label="Node graph showing note relationships">
       <g id="graph-viewport">
         <g id="graph-edges"></g>
         <g id="graph-nodes"></g>
@@ -916,7 +916,7 @@
             attributes: {
               tabindex: '0',
               role: 'link',
-              'aria-label': `(${label})、新しいタブで開きます`,
+              'aria-label': `(${label}), opens in a new tab`,
               'data-url': url,
               'data-end': String(matchEnd),
             },
@@ -1006,7 +1006,7 @@
         const box = wrap.appendChild(document.createElement('input'));
         box.type = 'checkbox';
         box.checked = this.checked;
-        box.setAttribute('aria-label', this.checked ? 'チェック済み' : '未チェック');
+        box.setAttribute('aria-label', this.checked ? 'Checked' : 'Unchecked');
         return wrap;
       }
       ignoreEvent() {
@@ -1030,7 +1030,7 @@
         btn.type = 'button';
         btn.className = 'md-fold-toggle';
         btn.textContent = this.folded ? '▶' : '▼';
-        btn.setAttribute('aria-label', this.folded ? '見出しを展開' : '見出しを折りたたむ');
+        btn.setAttribute('aria-label', this.folded ? 'Expand heading' : 'Collapse heading');
         return btn;
       }
       ignoreEvent() {
@@ -1258,7 +1258,7 @@
     function rebuildSuggestionSources() {
       linkSuggestionItems = notes.map((note) => ({
         id: note.id,
-        title: note.title.trim() === '' ? '無題' : note.title,
+        title: note.title.trim() === '' ? 'Untitled' : note.title,
         citationCount: getCitationCount(note, notes),
       }));
       // threshold: 0.4 ・・・ 0(完全一致のみ)〜1(何でも一致)の目盛りで、
@@ -1586,19 +1586,19 @@
       const diffHours = Math.floor(diffMs / 3600000);
       const diffDays = Math.floor(diffMs / 86400000);
       if (diffMinutes < 1) {
-        return 'たった今';
+        return 'just now';
       }
       if (diffMinutes < 60) {
-        return `${diffMinutes}分前`;
+        return `${diffMinutes} min ago`;
       }
       if (diffHours < 24) {
-        return `${diffHours}時間前`;
+        return `${diffHours} hr ago`;
       }
       if (diffDays === 1) {
-        return '昨日';
+        return 'yesterday';
       }
       if (diffDays < 7) {
-        return `${diffDays}日前`;
+        return `${diffDays} days ago`;
       }
       return formatDateTime(timestamp);
     }
@@ -1816,7 +1816,7 @@
       noteListEl.innerHTML = '';
 
       visible.forEach((note) => {
-        const titleText = note.title.trim() === '' ? '無題' : note.title;
+        const titleText = note.title.trim() === '' ? 'Untitled' : note.title;
 
         const li = document.createElement('li');
         li.className = 'note-item';
@@ -1832,7 +1832,7 @@
 
         const updatedSpan = document.createElement('span');
         updatedSpan.className = 'note-updated';
-        updatedSpan.textContent = `更新: ${formatDateTime(note.updatedAt)}`;
+        updatedSpan.textContent = `Updated: ${formatDateTime(note.updatedAt)}`;
 
         openBtn.appendChild(titleSpan);
         openBtn.appendChild(updatedSpan);
@@ -1841,8 +1841,8 @@
         deleteBtn.type = 'button';
         deleteBtn.className = 'note-delete-btn';
         deleteBtn.dataset.id = note.id;
-        deleteBtn.setAttribute('aria-label', `「${titleText}」を削除`);
-        deleteBtn.textContent = '削除';
+        deleteBtn.setAttribute('aria-label', `Delete "${titleText}"`);
+        deleteBtn.textContent = 'Delete';
 
         li.appendChild(openBtn);
         li.appendChild(deleteBtn);
@@ -1885,11 +1885,11 @@
 
     function announceFilterState() {
       if (selectedTags.length === 0) {
-        announce(`絞り込みを解除しました、${notes.length}件`);
+        announce(`Filter cleared, ${notes.length} notes`);
         return;
       }
       const visibleCount = getVisibleNotes().length;
-      announce(`${selectedTags.join('と')}で絞り込み中、${visibleCount}件`);
+      announce(`Filtering by ${selectedTags.join(' and ')}, ${visibleCount} notes`);
     }
 
     function toggleTag(name) {
@@ -1957,9 +1957,9 @@
       if (!note) {
         return;
       }
-      const titleText = note.title.trim() === '' ? '無題' : note.title;
+      const titleText = note.title.trim() === '' ? 'Untitled' : note.title;
       deleteTargetId = noteId;
-      deleteMessageEl.textContent = `「${titleText}」を削除します。この操作は元に戻せません。`;
+      deleteMessageEl.textContent = `"${titleText}" will be deleted. This action cannot be undone.`;
       deleteDialog.showModal();
     }
 
@@ -1975,7 +1975,7 @@
       rebuildSuggestionSources();
       renderListView();
       focusAfterDelete(deletedIndex);
-      announce(`「${deletedNote.title.trim() === '' ? '無題' : deletedNote.title}」を削除しました`);
+      announce(`"${deletedNote.title.trim() === '' ? 'Untitled' : deletedNote.title}" deleted`);
     }
 
     // --- ノート俯瞰モーダル ---------------------------------------------
@@ -1987,9 +1987,9 @@
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'note-link';
-      const titleText = note.title.trim() === '' ? '無題' : note.title;
+      const titleText = note.title.trim() === '' ? 'Untitled' : note.title;
       btn.textContent = extraLabel ? `${titleText}${extraLabel}` : titleText;
-      btn.setAttribute('aria-label', `${titleText}を開く`);
+      btn.setAttribute('aria-label', `Open ${titleText}`);
       btn.addEventListener('click', () => {
         overviewDialog.close();
         openEditor(note.id);
@@ -2000,7 +2000,7 @@
     function renderOverviewStats() {
       const linkCount = countValidLinks(notes);
       const tagCount = getAllTagsWithCounts(notes).length; // 既存関数を再利用
-      overviewStatsText.textContent = `全体: 合計${notes.length}ノート、${linkCount}リンク、${tagCount}タグ`;
+      overviewStatsText.textContent = `Total: ${notes.length} notes, ${linkCount} links, ${tagCount} tags`;
     }
 
     function renderOverviewRecent() {
@@ -2028,7 +2028,7 @@
 
       if (clusterNotes.length > 5) {
         const more = document.createElement('p');
-        more.textContent = `他${clusterNotes.length - 5}件`;
+        more.textContent = `${clusterNotes.length - 5} more`;
         container.appendChild(more);
       }
     }
@@ -2038,7 +2038,7 @@
       const hubs = getHubNotes(notes, 3).filter((note) => getCitationCount(note, notes) > 0);
       if (hubs.length === 0) {
         const p = document.createElement('p');
-        p.textContent = 'ハブノートはありません';
+        p.textContent = 'No hub notes';
         overviewHubsContainer.appendChild(p);
         return;
       }
@@ -2056,7 +2056,7 @@
         const details = document.createElement('details');
         details.open = false;
         const summary = document.createElement('summary');
-        summary.textContent = `${citationCount}件から参照`;
+        summary.textContent = `Referenced by ${citationCount}`;
         details.appendChild(summary);
 
         // ハブノートを参照しているノート(backlinks)だけを対象に、ハブと共有するタグで
@@ -2064,7 +2064,7 @@
         const backlinks = getBacklinkNotes(note, notes);
         if (backlinks.length === 0) {
           const p = document.createElement('p');
-          p.textContent = '参照元はありません';
+          p.textContent = 'No referencing notes';
           details.appendChild(p);
         } else {
           const hubTags = [...new Set(extractTags(note.body))];
@@ -2090,10 +2090,10 @@
             if (!cluster) {
               return;
             }
-            appendOverviewNoteCluster(details, `タグ「${tag}」を共有する参照元 (${cluster.length}件)`, cluster);
+            appendOverviewNoteCluster(details, `Referencing notes sharing tag "${tag}" (${cluster.length})`, cluster);
           });
           if (noSharedTag.length > 0) {
-            appendOverviewNoteCluster(details, `タグを共有しない参照元 (${noSharedTag.length}件)`, noSharedTag);
+            appendOverviewNoteCluster(details, `Referencing notes with no shared tag (${noSharedTag.length})`, noSharedTag);
           }
         }
 
@@ -2107,7 +2107,7 @@
       const pairs = getPotentialLinkPairs(notes, 3);
       if (pairs.length === 0) {
         const li = document.createElement('li');
-        li.textContent = '潜在リンク候補はありません';
+        li.textContent = 'No potential link candidates';
         overviewPotentialList.appendChild(li);
         return;
       }
@@ -2117,7 +2117,7 @@
         li.appendChild(document.createTextNode(' ⇔ '));
         li.appendChild(createOverviewNoteButton(noteB));
         const tagsSpan = document.createElement('span');
-        tagsSpan.textContent = ` (共通タグ: ${sharedTags.join('、')})`;
+        tagsSpan.textContent = ` (shared tags: ${sharedTags.join(', ')})`;
         li.appendChild(tagsSpan);
         overviewPotentialList.appendChild(li);
       });
@@ -2127,10 +2127,10 @@
       const isolated = getIsolatedNotes(notes);
       overviewIsolatedList.innerHTML = '';
       if (isolated.length === 0) {
-        overviewIsolatedCount.textContent = '孤立ノートはありません';
+        overviewIsolatedCount.textContent = 'No isolated notes';
         return;
       }
-      overviewIsolatedCount.textContent = `孤立ノート: ${isolated.length}件`;
+      overviewIsolatedCount.textContent = `Isolated notes: ${isolated.length}`;
       sortByUpdatedDesc(isolated).slice(0, 5).forEach((note) => {
         const li = document.createElement('li');
         li.appendChild(createOverviewNoteButton(note));
@@ -2149,7 +2149,7 @@
     function openOverviewModal() {
       renderOverviewModal();
       overviewDialog.showModal();
-      announce('ノート俯瞰を表示しました');
+      announce('Overview shown');
     }
 
     // --- ノードグラフモーダル -----------------------------------------
@@ -2160,11 +2160,11 @@
     const GRAPH_CENTER_Y = 750;
 
     const GRAPH_PARAMS = {
-      kRepel: 10000, // 反発力定数
-      kLink: 0.03, // [[]]リンクによるバネ定数
-      kTag: 0.02, // タグ共有(Jaccard係数)によるバネ定数
+      kRepel: 11000, // 反発力定数 10000
+      kLink: 0.03, // [[]]リンクによるバネ定数 0.03
+      kTag: 0.04, // タグ共有(Jaccard係数)によるバネ定数 0.02
       restLength: 200, // バネの自然長 L0
-      kCenter: 0.01, // 中心引力定数(ノードがビューポート外にはみ出さないよう強めにしてある)
+      kCenter: 0.012, // 中心引力定数(ノードがビューポート外にはみ出さないよう強めにしてある) 0.01
       centerX: GRAPH_CENTER_X, // 中心引力の目標点(キャンバス中央)
       centerY: GRAPH_CENTER_Y,
       damping: 0.85, // 減衰係数(毎ステップ速度に乗算)
@@ -2269,7 +2269,7 @@
       nodesByCitationDesc.forEach((note) => {
         const citationCount = getCitationCount(note, notes);
         const radius = 20 + 5 * Math.min(citationCount, 5);
-        const titleText = note.title.trim() === '' ? '無題' : note.title;
+        const titleText = note.title.trim() === '' ? 'Untitled' : note.title;
 
         const circle = document.createElementNS(SVG_NS, 'circle');
         circle.setAttribute('id', `graph-node-${note.id}`);
@@ -2286,7 +2286,7 @@
         }
         circle.setAttribute('tabindex', '0');
         circle.setAttribute('role', 'button');
-        circle.setAttribute('aria-label', `${titleText}、${citationCount}件から参照`);
+        circle.setAttribute('aria-label', `${titleText}, referenced by ${citationCount}`);
         circle.dataset.noteId = note.id;
         circle.addEventListener('click', () => openGraphNode(note.id));
         graphNodesGroup.appendChild(circle);
@@ -2295,7 +2295,7 @@
       // text は上のループとは別に、全circleの後にまとめて追加する(line→circle→textの順)。
       nodesByCitationDesc.forEach((note) => {
         const citationCount = getCitationCount(note, notes);
-        const titleText = note.title.trim() === '' ? '無題' : note.title;
+        const titleText = note.title.trim() === '' ? 'Untitled' : note.title;
 
         const text = document.createElementNS(SVG_NS, 'text');
         text.dataset.noteId = note.id;
@@ -2383,8 +2383,8 @@
     }
 
     function startGraphSimulationLoop() {
-      announce('レイアウトを計算中');
-      graphStatus.textContent = 'レイアウトを計算中';
+      announce('Calculating layout');
+      graphStatus.textContent = 'Calculating layout';
       stepGraphSimulationFrame();
     }
 
@@ -2399,8 +2399,8 @@
       const converged = totalSpeed < GRAPH_CONVERGENCE_THRESHOLD || graphIterationCount >= GRAPH_MAX_ITERATIONS;
       if (converged) {
         graphAnimationFrameId = null;
-        announce('レイアウトが確定しました');
-        graphStatus.textContent = 'レイアウトが確定しました';
+        announce('Layout settled');
+        graphStatus.textContent = 'Layout settled';
         return;
       }
       graphAnimationFrameId = requestAnimationFrame(stepGraphSimulationFrame);
@@ -2457,7 +2457,7 @@
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'note-link';
-      btn.textContent = note.title.trim() === '' ? '無題' : note.title;
+      btn.textContent = note.title.trim() === '' ? 'Untitled' : note.title;
       btn.addEventListener('click', () => openEditor(note.id));
       li.appendChild(btn);
       return li;
@@ -2473,13 +2473,13 @@
       outgoingListEl.innerHTML = '';
       outgoing.forEach((n) => outgoingListEl.appendChild(createNoteLinkButton(n)));
       outgoingDetails.hidden = outgoing.length === 0;
-      outgoingDetails.querySelector('summary').textContent = `参照しているノート (${outgoing.length})`;
+      outgoingDetails.querySelector('summary').textContent = `Notes This References (${outgoing.length})`;
 
       const backlinks = getBacklinkNotes(note, notes);
       backlinksListEl.innerHTML = '';
       backlinks.forEach((n) => backlinksListEl.appendChild(createNoteLinkButton(n)));
       backlinksDetails.hidden = backlinks.length === 0;
-      backlinksDetails.querySelector('summary').textContent = `参照されているノート(backlinks) (${backlinks.length})`;
+      backlinksDetails.querySelector('summary').textContent = `Referenced By (${backlinks.length})`;
 
       relatedEmptyMessage.hidden = outgoing.length > 0 || backlinks.length > 0;
     }
@@ -2491,7 +2491,7 @@
       }
 
       const trimmedTitle = note.title.trim();
-      const baseTitle = trimmedTitle === '' ? '無題' : trimmedTitle;
+      const baseTitle = trimmedTitle === '' ? 'Untitled' : trimmedTitle;
       const isDuplicate = notes.some((n) => n.id !== note.id && n.title.trim() === baseTitle);
 
       // タイトルが空でなく、かつ重複もなければ何もしない
@@ -2519,8 +2519,8 @@
         renderRelatedNotes();
       }
       announce(isDuplicate
-        ? `タイトルが重複していたため「${finalTitle}」に設定しました`
-        : `タイトルを「${finalTitle}」に設定しました`);
+        ? `Title was a duplicate, set to "${finalTitle}"`
+        : `Title set to "${finalTitle}"`);
       return true;
     }
 
@@ -2566,7 +2566,7 @@
       handleEditorInput();
       const renamed = resolveDuplicateTitle(currentNoteId);
       if (!renamed) {
-        announce('保存しました');
+        announce('Saved');
       }
     }
 
