@@ -57,8 +57,7 @@
         display: grid;
       }
 
-      #list-heading,
-      #overview-open-btn {
+      .list-toolbar {
         grid-area: heading;
       }
 
@@ -78,6 +77,26 @@
     h1 {
       font-size: 1.4rem;
       margin-bottom: 1rem;
+    }
+
+    /* h1とツールバーボタンを同じgrid-areaに直接置くと、各要素がセルいっぱいに
+       ストレッチして重なり合ってしまう(後勝ちで背景色が前の要素を隠す)ため、
+       1つのflexコンテナにまとめてから grid-area を割り当てる。 */
+    .list-toolbar {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0.5rem 0.75rem;
+      margin-bottom: 1rem;
+    }
+
+    .list-toolbar h1 {
+      margin-bottom: 0;
+      margin-right: auto;
+    }
+
+    .list-toolbar button {
+      margin-bottom: 0;
     }
 
     .visually-hidden {
@@ -121,7 +140,9 @@
     }
 
     #overview-open-btn,
-    #graph-open-btn {
+    #graph-open-btn,
+    #export-btn,
+    #import-btn {
       display: block;
       margin-bottom: 1rem;
       padding: 0.5rem 1rem;
@@ -525,17 +546,65 @@
     }
 
     #graph-dialog {
-      max-width: 880px;
+      max-width: 1160px; /* SVGと凡例パネルを横並びにするため、以前(880px)より広げてある */
       width: 90vw;
       max-height: 90vh;
       overflow: auto;
     }
 
+    /* SVG(左)と凡例パネル(右)を横並びにする。画面が狭い場合はflex-wrapで
+       自然に上下積みへフォールバックする(#graph-legendのflex-basis:100%指定と合わせて)。 */
+    .graph-body {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-start;
+      gap: 1rem;
+      margin-top: 1rem;
+    }
+
     #graph-dialog svg {
       display: block;
-      margin: 1rem auto 0;
       max-width: 100%;
       height: auto;
+      flex: 1 1 560px;
+      min-width: 0; /* flexアイテムは既定でmin-width:autoのため、これが無いと縮小しきれずレイアウトが崩れる */
+    }
+
+    #graph-legend {
+      flex: 0 0 240px;
+      width: 240px;
+      max-width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    @media (max-width: 700px) {
+      #graph-legend {
+        flex-basis: 100%;
+        width: 100%;
+      }
+    }
+
+    #graph-legend summary {
+      cursor: pointer;
+      font-weight: bold;
+    }
+
+    #graph-legend ul {
+      list-style: none;
+      margin: 0.4rem 0 0;
+      padding-left: 1rem;
+    }
+
+    .legend-swatch {
+      display: inline-block;
+      width: 0.9rem;
+      height: 0.9rem;
+      margin-right: 0.4rem;
+      vertical-align: middle;
+      border: 1px solid var(--border-color);
+      border-radius: 2px;
     }
 
     /* viewBox自体はCSSトランジションが効かないため、内容全体を<g>で包んで
@@ -607,6 +676,8 @@
       #new-note-btn,
       #overview-open-btn,
       #graph-open-btn,
+      #export-btn,
+      #import-btn,
       #back-btn,
       dialog,
       .dialog-actions button,
@@ -620,6 +691,10 @@
       .tag-btn {
         background: #1c1c1c;
         color: #eee;
+        border-color: #444;
+      }
+
+      .legend-swatch {
         border-color: #444;
       }
 
@@ -653,8 +728,13 @@
 
   <main>
     <section id="view-list" aria-labelledby="list-heading">
-      <h1 id="list-heading">Notes</h1>
-      <button id="overview-open-btn" type="button">Show Overview</button>
+      <div class="list-toolbar">
+        <h1 id="list-heading">Notes</h1>
+        <button id="overview-open-btn" type="button">Show Overview</button>
+        <button id="export-btn" type="button">Export</button>
+        <button id="import-btn" type="button">Import</button>
+        <input id="import-file-input" type="file" accept="application/json" hidden>
+      </div>
 
       <div class="field" id="search-field">
         <label for="search-input">Search</label>
@@ -713,6 +793,16 @@
     </div>
   </dialog>
 
+  <dialog id="import-dialog" aria-labelledby="import-dialog-heading">
+    <h2 id="import-dialog-heading">Import notes?</h2>
+    <p id="import-dialog-message"></p>
+    <div class="dialog-actions">
+      <button id="import-cancel-btn" type="button" autofocus>Cancel</button>
+      <button id="import-merge-btn" type="button">Merge</button>
+      <button id="import-overwrite-btn" type="button">Overwrite</button>
+    </div>
+  </dialog>
+
   <dialog id="overview-dialog" aria-labelledby="overview-dialog-heading">
     <h2 id="overview-dialog-heading">Note Overview</h2>
     <button id="overview-close-btn" type="button" autofocus aria-label="Close">✕</button>
@@ -752,13 +842,16 @@
       <button id="graph-reset-btn" type="button" aria-label="Reset node layout">Reset Layout</button>
     </div>
     <p id="graph-status" class="visually-hidden" aria-live="polite"></p>
-    <svg id="graph-svg" viewBox="500 350 1000 800" width="1000" height="800"
-         role="img" aria-label="Node graph showing note relationships">
-      <g id="graph-viewport">
-        <g id="graph-edges"></g>
-        <g id="graph-nodes"></g>
-      </g>
-    </svg>
+    <div class="graph-body">
+      <svg id="graph-svg" viewBox="500 350 1000 800" width="1000" height="800"
+           role="img" aria-label="Node graph showing note relationships">
+        <g id="graph-viewport">
+          <g id="graph-edges"></g>
+          <g id="graph-nodes"></g>
+        </g>
+      </svg>
+      <div id="graph-legend"></div>
+    </div>
   </dialog>
 
   <script type="module">
@@ -786,6 +879,7 @@
     let notes = [];
     let currentNoteId = null;
     let deleteTargetId = null;
+    let pendingImportNotes = [];
     let selectedTags = [];
     let searchQuery = '';
 
@@ -801,6 +895,14 @@
     const deleteMessageEl = document.getElementById('delete-dialog-message');
     const deleteCancelBtn = document.getElementById('delete-cancel-btn');
     const deleteConfirmBtn = document.getElementById('delete-confirm-btn');
+    const exportBtn = document.getElementById('export-btn');
+    const importBtn = document.getElementById('import-btn');
+    const importFileInput = document.getElementById('import-file-input');
+    const importDialog = document.getElementById('import-dialog');
+    const importMessageEl = document.getElementById('import-dialog-message');
+    const importCancelBtn = document.getElementById('import-cancel-btn');
+    const importMergeBtn = document.getElementById('import-merge-btn');
+    const importOverwriteBtn = document.getElementById('import-overwrite-btn');
     const relatedEmptyMessage = document.getElementById('related-empty-message');
     const outgoingDetails = document.getElementById('outgoing-details');
     const outgoingListEl = document.getElementById('outgoing-list');
@@ -825,6 +927,7 @@
     const graphViewportGroup = document.getElementById('graph-viewport');
     const graphEdgesGroup = document.getElementById('graph-edges');
     const graphNodesGroup = document.getElementById('graph-nodes');
+    const graphLegendEl = document.getElementById('graph-legend');
 
     // --- 本文エディタ(CodeMirror) -------------------------------------
 
@@ -1448,6 +1551,105 @@
 
     function saveNotes(notesToSave) {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(notesToSave));
+    }
+
+    // --- エクスポート・インポート -------------------------------------
+
+    function formatDateForFilename(date) {
+      const pad = (n) => String(n).padStart(2, '0');
+      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+    }
+
+    // title/body はアプリ全体で文字列前提(.trim() 等)のため、この2つを必須項目とする。
+    function isValidNoteShape(entry) {
+      return (
+        entry !== null &&
+        typeof entry === 'object' &&
+        !Array.isArray(entry) &&
+        typeof entry.title === 'string' &&
+        typeof entry.body === 'string'
+      );
+    }
+
+    // id/updatedAt は欠落・不正でも復旧可能な項目なので、拒否せずここで補完する。
+    function normalizeImportedNote(entry) {
+      return {
+        id: typeof entry.id === 'string' && entry.id.trim() !== '' ? entry.id : crypto.randomUUID(),
+        title: entry.title,
+        body: entry.body,
+        updatedAt: typeof entry.updatedAt === 'number' && Number.isFinite(entry.updatedAt) ? entry.updatedAt : Date.now(),
+      };
+    }
+
+    // JSON.parse失敗、またはトップレベルが配列でない場合はファイル全体を拒否してnullを返す。
+    // 配列内の不正なエントリは(ファイル全体は拒否せず)個別に無視する。
+    function parseImportedNotesJson(rawText) {
+      let parsed;
+      try {
+        parsed = JSON.parse(rawText);
+      } catch (error) {
+        return null;
+      }
+      if (!Array.isArray(parsed)) {
+        return null;
+      }
+      return parsed.filter(isValidNoteShape).map(normalizeImportedNote);
+    }
+
+    function handleExportClick() {
+      const blob = new Blob([JSON.stringify(notes, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `notes-export-${formatDateForFilename(new Date())}.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      announce(`Exported ${notes.length} notes`);
+    }
+
+    function handleImportBtnClick() {
+      importFileInput.click();
+    }
+
+    async function handleImportFileChange() {
+      const file = importFileInput.files[0];
+      if (!file) {
+        return;
+      }
+      try {
+        const rawText = await file.text();
+        const importedNotes = parseImportedNotesJson(rawText);
+        if (!importedNotes || importedNotes.length === 0) {
+          announce('Import failed: file is not a valid notes export');
+          return;
+        }
+        pendingImportNotes = importedNotes;
+        importMessageEl.textContent = `${pendingImportNotes.length} note(s) found. Choose how to import them.`;
+        importDialog.showModal();
+      } finally {
+        importFileInput.value = '';
+      }
+    }
+
+    function applyImportedNotes(mode) {
+      if (mode === 'overwrite') {
+        notes = pendingImportNotes;
+      } else {
+        // マージ時、既存ノートとIDが重複するインポート対象はデータを失わないよう新IDを振って追加する。
+        const existingIds = new Set(notes.map((n) => n.id));
+        const notesToAdd = pendingImportNotes.map((note) =>
+          existingIds.has(note.id) ? { ...note, id: crypto.randomUUID() } : note
+        );
+        notes = notes.concat(notesToAdd);
+      }
+      const importedCount = pendingImportNotes.length;
+      importDialog.close();
+      saveNotes(notes);
+      rebuildSuggestionSources();
+      renderListView();
+      announce(`Imported ${importedCount} notes (${mode})`);
     }
 
     function sortByUpdatedDesc(list) {
@@ -2292,6 +2494,7 @@
       console.log(`[graph] hub notes (citationCount >= ${GRAPH_HUB_LABEL_THRESHOLD}):`, hubTitles);
 
       renderGraphSvgElements();
+      renderGraphLegend();
     }
 
     // SVGは後に書かれた要素ほど手前に描画されるため、line→circle→text の順で
@@ -2354,6 +2557,56 @@
           text.classList.add('graph-label-hub'); // ハブノードのラベルは常時表示
         }
         graphNodesGroup.appendChild(text);
+      });
+    }
+
+    function createGraphLegendNoteButton(note) {
+      const li = document.createElement('li');
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'note-link';
+      btn.textContent = note.title.trim() === '' ? 'Untitled' : note.title;
+      btn.addEventListener('click', () => openGraphNode(note.id));
+      li.appendChild(btn);
+      return li;
+    }
+
+    // タグ→色の凡例。graphSortedTags/graphTagColorMap は setupGraphSimulation() で
+    // ノート内容から都度再計算されるため、この関数もそこから呼び出して同期させる。
+    function renderGraphLegend() {
+      graphLegendEl.innerHTML = '';
+      // フォールバック色(#999999)が割り当てられたタグ(パレット上位に入らなかったもの)は
+      // 凡例が見づらくなるため除外し、実際に色が割り当てられた上位タグのみ表示する。
+      const legendTags = graphSortedTags.slice(0, OKABE_ITO_TAG_COLORS.length);
+      if (legendTags.length === 0) {
+        const p = document.createElement('p');
+        p.textContent = 'No tags yet';
+        graphLegendEl.appendChild(p);
+        return;
+      }
+      legendTags.forEach((tag) => {
+        const details = document.createElement('details');
+        details.open = false;
+
+        // <summary> にはボタンを入れ子にしない(一部のスクリーンリーダーで対話的要素の
+        // ネストが不安定になるため。俯瞰モーダルのハブノート表示と同じ理由)。
+        // スワッチは装飾用の非対話的な要素なので問題ない。
+        const summary = document.createElement('summary');
+        const swatch = document.createElement('span');
+        swatch.className = 'legend-swatch';
+        swatch.style.backgroundColor = graphTagColorMap.get(tag);
+        summary.appendChild(swatch);
+        summary.appendChild(document.createTextNode(tag));
+        details.appendChild(summary);
+
+        const taggedNotes = sortByUpdatedDesc(notes.filter((note) => extractTags(note.body).includes(tag)));
+        const ul = document.createElement('ul');
+        taggedNotes.forEach((note) => {
+          ul.appendChild(createGraphLegendNoteButton(note));
+        });
+        details.appendChild(ul);
+
+        graphLegendEl.appendChild(details);
       });
     }
 
@@ -2623,6 +2876,9 @@
     // --- イベント登録 -------------------------------------------------
 
     newNoteBtn.addEventListener('click', handleNewNoteClick);
+    exportBtn.addEventListener('click', handleExportClick);
+    importBtn.addEventListener('click', handleImportBtnClick);
+    importFileInput.addEventListener('change', handleImportFileChange);
     backBtn.addEventListener('click', closeEditor);
     clearTagsBtn.addEventListener('click', () => {
       selectedTags = [];
@@ -2665,6 +2921,15 @@
     deleteConfirmBtn.addEventListener('click', handleConfirmDelete);
     deleteDialog.addEventListener('close', () => {
       deleteTargetId = null;
+    });
+
+    importCancelBtn.addEventListener('click', () => {
+      importDialog.close();
+    });
+    importMergeBtn.addEventListener('click', () => applyImportedNotes('merge'));
+    importOverwriteBtn.addEventListener('click', () => applyImportedNotes('overwrite'));
+    importDialog.addEventListener('close', () => {
+      pendingImportNotes = [];
     });
 
     overviewOpenBtn.addEventListener('click', openOverviewModal);
@@ -2726,7 +2991,7 @@
     });
 
     document.addEventListener('keydown', (event) => {
-      if (deleteDialog.open || overviewDialog.open || graphDialog.open) {
+      if (deleteDialog.open || importDialog.open || overviewDialog.open || graphDialog.open) {
         // ダイアログ表示中は <dialog> 標準のフォーカストラップ・Escape挙動に任せる
         return;
       }
