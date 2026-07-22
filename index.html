@@ -2441,6 +2441,10 @@
     let graphTagColorMap = new Map();
     let graphAnimationFrameId = null;
     let graphIterationCount = 0;
+    // クリック/タップの「1回目=フォーカスのみ、2回目(同じノード)=開く」を判定するための状態。
+    // document.activeElement は tabindex="0" のノードをクリックした時点で(このclickハンドラが
+    // 呼ばれる前に)ブラウザが自動でフォーカスしてしまうため、判定には使えない。
+    let lastClickedGraphNodeId = null;
 
     // 全ノートのタグ出現頻度を集計し、上位7個にOkabe-Itoカラーを、それ以外に
     // フォールバック色(#999999)を割り当てる。頻度は1ノートにつき1回だけ数える
@@ -2541,7 +2545,17 @@
         circle.setAttribute('role', 'button');
         circle.setAttribute('aria-label', `${titleText}, referenced by ${citationCount}`);
         circle.dataset.noteId = note.id;
-        circle.addEventListener('click', () => openGraphNode(note.id));
+        // 1回目のクリック/タップはフォーカスのみ(ラベル表示)。同じノードへの2回目の
+        // クリック/タップ、またはEnterキーで初めて編集画面を開く。
+        circle.addEventListener('click', () => {
+          if (lastClickedGraphNodeId === note.id) {
+            openGraphNode(note.id);
+            lastClickedGraphNodeId = null;
+          } else {
+            lastClickedGraphNodeId = note.id;
+            circle.focus();
+          }
+        });
         graphNodesGroup.appendChild(circle);
       });
 
@@ -2988,6 +3002,8 @@
         cancelAnimationFrame(graphAnimationFrameId);
         graphAnimationFrameId = null;
       }
+      // 次回開いた時に前回の「1回目クリック済み」状態を引き継がないようにする
+      lastClickedGraphNodeId = null;
     });
 
     document.addEventListener('keydown', (event) => {
