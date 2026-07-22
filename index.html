@@ -45,6 +45,7 @@
         grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
         grid-template-areas:
           "heading heading"
+          "search  search"
           "tags    notes";
         gap: 1.5rem;
         align-items: start;
@@ -59,6 +60,10 @@
       #list-heading,
       #overview-open-btn {
         grid-area: heading;
+      }
+
+      #search-field {
+        grid-area: search;
       }
 
       .tags-sidebar {
@@ -300,11 +305,16 @@
       font-weight: bold;
     }
 
-    #title-input {
+    #title-input,
+    #search-input {
       font: inherit;
       padding: 0.6rem;
       border: 1px solid var(--border-color);
       border-radius: 6px;
+    }
+
+    #search-field {
+      margin-bottom: 1rem;
     }
 
     /* 本文欄(CodeMirror)。.cm-editor は既定スタイルの優先度が低いため、
@@ -601,6 +611,7 @@
       dialog,
       .dialog-actions button,
       #title-input,
+      #search-input,
       .cm-editor,
       .cm-tooltip-autocomplete,
       .related-section,
@@ -644,6 +655,11 @@
     <section id="view-list" aria-labelledby="list-heading">
       <h1 id="list-heading">Notes</h1>
       <button id="overview-open-btn" type="button">Show Overview</button>
+
+      <div class="field" id="search-field">
+        <label for="search-input">Search</label>
+        <input id="search-input" type="search" autocomplete="off">
+      </div>
 
       <aside aria-labelledby="tags-heading" class="tags-sidebar">
         <h2 id="tags-heading">Tags</h2>
@@ -771,11 +787,13 @@
     let currentNoteId = null;
     let deleteTargetId = null;
     let selectedTags = [];
+    let searchQuery = '';
 
     const liveRegion = document.getElementById('live-region');
     const listView = document.getElementById('view-list');
     const editorView = document.getElementById('view-editor');
     const noteListEl = document.getElementById('note-list');
+    const searchInput = document.getElementById('search-input');
     const newNoteBtn = document.getElementById('new-note-btn');
     const backBtn = document.getElementById('back-btn');
     const titleInput = document.getElementById('title-input');
@@ -1253,6 +1271,7 @@
     let linkSuggestionItems = [];
     let tagFuse = null;
     let tagSuggestionItems = [];
+    let noteSearchFuse = null;
 
     // notes配列が変わるたびに呼び直し、サジェスト用のFuseインスタンスを作り直す。
     function rebuildSuggestionSources() {
@@ -1270,6 +1289,9 @@
 
       tagSuggestionItems = getAllTagsWithCounts(notes); // 既存関数を再利用(使用頻度順ソート済み)
       tagFuse = new Fuse(tagSuggestionItems, { keys: ['name'], threshold: 0.4, ignoreLocation: true });
+
+      // 一覧画面の検索ボックス用。タイトル・本文の両方をあいまい一致の対象にする。
+      noteSearchFuse = new Fuse(notes, { keys: ['title', 'body'], threshold: 0.4, ignoreLocation: true });
     }
 
     // Fuse.js はあくまで候補の絞り込みだけに使い、最終的な並び順は引用数で決め直す。
@@ -1517,6 +1539,18 @@
         const noteTags = new Set(extractTags(note.body));
         return selectedTagNames.every((tag) => noteTags.has(tag));
       });
+    }
+
+    // タイトル・本文への部分一致を、既存のサジェスト機能と同じFuse.jsのあいまい一致で判定する。
+    // noteSearchFuse(全ノート対象)で検索し、その結果とnotesToFilterの積集合を返すことで、
+    // タグフィルタ後の集合にさらに絞り込みをかけられる(AND条件)。
+    function filterNotesBySearch(notesToFilter, query) {
+      const trimmedQuery = query.trim();
+      if (trimmedQuery === '') {
+        return notesToFilter;
+      }
+      const matchedIds = new Set(noteSearchFuse.search(trimmedQuery).map((result) => result.item.id));
+      return notesToFilter.filter((note) => matchedIds.has(note.id));
     }
 
     // --- ノート俯瞰モーダル用の純粋関数 -------------------------------
@@ -1807,7 +1841,8 @@
     // --- 一覧画面 ---------------------------------------------------
 
     function getVisibleNotes() {
-      const filtered = filterNotesByTags(notes, selectedTags);
+      const tagFiltered = filterNotesByTags(notes, selectedTags);
+      const filtered = filterNotesBySearch(tagFiltered, searchQuery);
       return sortByUpdatedDesc(filtered);
     }
 
@@ -1883,13 +1918,28 @@
       }
     }
 
+    function focusFirstTagButton() {
+      const firstBtn = tagListEl.querySelector('.tag-btn');
+      if (firstBtn) {
+        firstBtn.focus();
+      }
+    }
+
     function announceFilterState() {
-      if (selectedTags.length === 0) {
+      const trimmedQuery = searchQuery.trim();
+      if (selectedTags.length === 0 && trimmedQuery === '') {
         announce(`Filter cleared, ${notes.length} notes`);
         return;
       }
       const visibleCount = getVisibleNotes().length;
-      announce(`Filtering by ${selectedTags.join(' and ')}, ${visibleCount} notes`);
+      const parts = [];
+      if (selectedTags.length > 0) {
+        parts.push(selectedTags.join(' and '));
+      }
+      if (trimmedQuery !== '') {
+        parts.push(`"${trimmedQuery}"`);
+      }
+      announce(`Filtering by ${parts.join(', ')}, ${visibleCount} notes`);
     }
 
     function toggleTag(name) {
@@ -2580,6 +2630,20 @@
       renderNoteList();
       announceFilterState();
     });
+    searchInput.addEventListener('input', () => {
+      searchQuery = searchInput.value;
+      renderNoteList();
+      announceFilterState();
+    });
+    searchInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && searchQuery !== '') {
+        event.preventDefault();
+        searchInput.value = '';
+        searchQuery = '';
+        renderNoteList();
+        announceFilterState();
+      }
+    });
     titleInput.addEventListener('input', handleEditorInput);
     // 本文側の入力検知は bodyExtensions 内の EditorView.updateListener が担う
 
@@ -2682,6 +2746,26 @@
         // Shift+/ (多くのキーボード配列では "?" として送られる) で俯瞰モーダルを開く
         event.preventDefault();
         openOverviewModal();
+      } else if (event.key === 'Home' && !listView.hidden && editorView.hidden && document.activeElement !== searchInput) {
+        // 検索ボックス自身にフォーカスがある時は、テキスト編集としての本来のHome(先頭文字へ)を優先する
+        event.preventDefault();
+        if (searchInput) {
+          searchInput.focus();
+        } else {
+          newNoteBtn.focus();
+        }
+      } else if (event.key === 'ArrowLeft' && !listView.hidden && editorView.hidden && noteListEl.contains(document.activeElement)) {
+        // ノート一覧側から左矢印でタグセクションへ(選択中タグがあればそれ、無ければ先頭のタグ)
+        event.preventDefault();
+        if (selectedTags.length > 0) {
+          focusTagButton(selectedTags[0]);
+        } else {
+          focusFirstTagButton();
+        }
+      } else if (event.key === 'ArrowRight' && !listView.hidden && editorView.hidden && tagListEl.contains(document.activeElement)) {
+        // タグセクション側から右矢印でノート一覧へ(focusListItemは対象idが無ければ先頭ノートにフォールバックする)
+        event.preventDefault();
+        focusListItem(currentNoteId);
       }
     });
 
